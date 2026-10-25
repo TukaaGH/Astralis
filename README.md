@@ -1,4 +1,4 @@
-# Libraries
+# Astralis
 
 Standalone Luau libraries.
 
