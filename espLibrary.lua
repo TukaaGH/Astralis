@@ -346,7 +346,7 @@ local DEFAULT_FEATURES = {
 function Context:createDrawing(kind, properties)
     assert(self._group, "createDrawing is only available during feature.create")
     local drawing = self.controller._drawingFactory(kind)
-    table.insert(self._group.all, drawing) -- Own it before property assignment can fail.
+    table.insert(self._group.all, drawing)
     drawing.Visible = false
     for key, value in pairs(properties or {}) do
         drawing[key] = value
@@ -383,6 +383,7 @@ end
 local function textFeature(order, resolve, side)
     return {
         order = order,
+        managesVisibility = true,
         create = function(context)
             return { text = context:createDrawing("Text", { ZIndex = 2 }) }
         end,
@@ -390,6 +391,8 @@ local function textFeature(order, resolve, side)
             local text = resolve(context, options)
             if text ~= nil and text ~= "" then
                 applyText(drawings.text, context, options, text, side)
+            else
+                drawings.text.Visible = false
             end
         end,
     }
@@ -399,6 +402,7 @@ local function builtins()
     return {
         box = {
             order = 10,
+            managesVisibility = true,
             create = function(context)
                 return {
                     outline = context:createDrawing("Square", { ZIndex = 1, Filled = false }),
@@ -446,6 +450,7 @@ local function builtins()
         end, "below"),
         healthbar = {
             order = 20,
+            managesVisibility = true,
             create = function(context)
                 return {
                     background = context:createDrawing("Square", { Filled = true, ZIndex = 1 }),
@@ -458,6 +463,8 @@ local function builtins()
                     health, maximum = options.value(context)
                 end
                 if not finite(health) or not finite(maximum) or maximum <= 0 then
+                    drawings.background.Visible = false
+                    drawings.bar.Visible = false
                     return
                 end
                 local ratio = math.clamp(health / maximum, 0, 1)
@@ -773,7 +780,7 @@ function Controller:reconcile()
     local ok, targets = pcall(self.source.list)
     if not ok or type(targets) ~= "table" then
         self:_report("source.list", ok and "list must return an array" or targets)
-        return -- A failed enumeration never removes the last good membership set.
+        return
     end
     local nextTargets = {}
     for _, target in ipairs(targets) do
@@ -805,6 +812,9 @@ function Controller:_renderFeature(handle, name, context)
     local group = handle._groups[name]
     local ok, problem = pcall(function()
         if not read(options.enabled, context, false) then
+            if group then
+                hideGroup(group)
+            end
             return
         end
         if handle._removed or self._definitions[name] ~= definition then
@@ -833,6 +843,9 @@ function Controller:_renderFeature(handle, name, context)
             end
             group.drawings = drawings or {}
         end
+        if not definition.managesVisibility then
+            hideGroup(group)
+        end
         definition.render(context, group.drawings, options)
     end)
     context._group = nil
@@ -845,7 +858,6 @@ function Controller:_renderFeature(handle, name, context)
 end
 
 function Controller:_stepHandle(handle, camera, delta)
-    handle:hide()
     if not self.enabled or not handle.enabled or handle._removed then
         return
     end
@@ -915,6 +927,7 @@ function Controller:_stepHandle(handle, camera, delta)
         end
         self:_renderFeature(handle, name, context)
     end
+    return true
 end
 
 function Controller:step(delta)
@@ -934,10 +947,12 @@ function Controller:step(delta)
         if not camera or not ok then
             handle:hide()
         else
-            local rendered, problem = pcall(self._stepHandle, self, handle, camera, delta)
+            local rendered, result = pcall(self._stepHandle, self, handle, camera, delta)
             if not rendered then
                 handle:hide()
-                self:_report("target", problem, handle)
+                self:_report("target", result, handle)
+            elseif result ~= true then
+                handle:hide()
             end
         end
     end
