@@ -888,6 +888,11 @@ windowClass.new = function(options: table)
             end
         end)
     end
+    if type(options.discord) == "string" then
+        window:setDiscordInvite(options.discord)
+    elseif type(options.discord) == "table" then
+        window:setDiscordInvite(options.discord.invite, options.discord.promptOnFirstLaunch)
+    end
     return window, window.flags
 end
 tabClass.new = function(window, tabName: string)
@@ -2125,6 +2130,212 @@ do
         self.drawings.healthbar.Size = vector2(math.max(maxSize * healthPerc, 0), 6)
         self.drawings.healthbar.Color = healthColour
     end
+end
+
+local function inviteCode(value)
+    if type(value) ~= "string" then
+        return nil
+    end
+    local code = value:match("^%s*(.-)%s*$")
+    code = code:gsub("^https?://", ""):gsub("^www%.", "")
+    code = code:match("^discord%.gg/([^/?#]+)")
+        or code:match("^discord%.com/invite/([^/?#]+)")
+        or code:match("^discordapp%.com/invite/([^/?#]+)")
+        or code
+    if #code == 0 or #code > 100 or not code:match("^[%w_-]+$") then
+        return nil
+    end
+    return code
+end
+
+local function discordEnvironment()
+    return type(getgenv) == "function" and getgenv() or getfenv()
+end
+
+local function discordRegistry(environment)
+    local registry = environment.__UIDiscordInvites
+    if type(registry) ~= "table" or type(registry.attempted) ~= "table" or type(registry.inFlight) ~= "table" then
+        registry = { attempted = {}, inFlight = {} }
+        environment.__UIDiscordInvites = registry
+    end
+    return registry
+end
+
+local function discordRequest(environment)
+    for _, name in ipairs({ "request", "http_request", "httprequest" }) do
+        if type(environment[name]) == "function" then
+            return environment[name]
+        end
+    end
+    for _, name in ipairs({ "http", "syn", "fluxus" }) do
+        local provider = environment[name]
+        if type(provider) == "table" and type(provider.request) == "function" then
+            return provider.request
+        end
+    end
+    return nil
+end
+
+function windowClass:openDiscordInvite(automatic)
+    local code = self.discordInvite
+    if self.destroyed or not code then
+        return false
+    end
+    local environment = discordEnvironment()
+    local registry = discordRegistry(environment)
+    if registry.inFlight[code] or (automatic and registry.attempted[code]) then
+        return false
+    end
+    local token = {}
+    registry.inFlight[code] = token
+    self.discordStatus = "pending"
+    task_spawn(function()
+        local completed, timedOut = false, false
+        local function unavailable(message)
+            if not self.destroyed and self.discordInvite == code then
+                self.discordStatus = "unavailable"
+                self:notify(message or "Discord is unavailable. Use Copy invite.", 5)
+            end
+        end
+        local ok, result = pcall(function()
+            local path = "ui-discord-prompt-" .. code .. ".txt"
+            if automatic and type(environment.readfile) == "function" then
+                local read, contents = pcall(environment.readfile, path)
+                if read and contents == "attempted" then
+                    registry.attempted[code] = true
+                    return "remembered"
+                end
+            end
+            if self.destroyed or self.discordInvite ~= code then
+                return "cancelled"
+            end
+            registry.attempted[code] = true
+            if type(environment.writefile) == "function" then
+                pcall(environment.writefile, path, "attempted")
+            end
+            local request = discordRequest(environment)
+            if not request then
+                return "unavailable"
+            end
+            local httpService = game:GetService("HttpService")
+            task_delay(8, function()
+                if not completed then
+                    timedOut = true
+                    unavailable("Discord did not respond. Use Copy invite.")
+                end
+            end)
+            local response = request({
+                Url = "http://127.0.0.1:6463/rpc?v=1",
+                Method = "POST",
+                Headers = {
+                    ["Content-Type"] = "application/json",
+                    Origin = "https://discord.com",
+                },
+                Body = httpService:JSONEncode({
+                    cmd = "INVITE_BROWSER",
+                    args = { code = code },
+                    nonce = httpService:GenerateGUID(false),
+                }),
+                Timeout = 5,
+            })
+            if type(response) ~= "table" or response.Success == false then
+                return "unavailable"
+            end
+            local status = tonumber(response.StatusCode or response.Status)
+            if not status or status < 200 or status >= 300 then
+                return "unavailable"
+            end
+            if type(response.Body) == "string" and response.Body ~= "" then
+                local decoded, body = pcall(httpService.JSONDecode, httpService, response.Body)
+                if decoded and type(body) == "table" and (body.evt == "ERROR" or body.cmd == "ERROR") then
+                    return "unavailable"
+                end
+            end
+            return "requested"
+        end)
+        completed = true
+        if registry.inFlight[code] == token then
+            registry.inFlight[code] = nil
+        end
+        if self.destroyed or self.discordInvite ~= code then
+            return
+        end
+        if not ok or result == "unavailable" then
+            if not timedOut then
+                unavailable()
+            end
+        elseif result ~= "cancelled" then
+            self.discordStatus = result
+        end
+    end)
+    return true
+end
+
+function windowClass:copyDiscordInvite()
+    if self.destroyed or not self.discordInvite then
+        return false
+    end
+    local environment = discordEnvironment()
+    local clipboard = type(environment.setclipboard) == "function" and environment.setclipboard
+        or environment.toclipboard
+    local url = "https://discord.gg/" .. self.discordInvite
+    if type(clipboard) ~= "function" or not pcall(clipboard, url) then
+        self:notify("Clipboard unavailable: discord.gg/" .. self.discordInvite, 6)
+        return false
+    end
+    self:notify("Invite copied.", 3)
+    return true
+end
+
+function windowClass:setDiscordInvite(invite, promptOnFirstLaunch)
+    if self.destroyed then
+        return false
+    end
+    local code = inviteCode(invite)
+    if invite ~= nil and not code then
+        return false
+    end
+    self.discordInvite = code
+    self.discordStatus = code and "ready" or nil
+    local d, z = self.drawings, self.baseZindex
+    if code and not d.discordButton then
+        local position = d.base.Position + vector2(self.size.X - 150, 7)
+        d.discordButton = square(self, nil, position, vector2(58, 17), palette.panel, z + 4)
+        d.discordOutline = square(self, nil, position, vector2(58, 17), palette.border, z + 5, false)
+        d.discordLabel = label(self, nil, position + vector2(29, 1), "Discord", palette.text, z + 6, true)
+        local copyPosition = position + vector2(64, 0)
+        d.discordCopyButton = square(self, nil, copyPosition, vector2(78, 17), palette.panel, z + 4)
+        d.discordCopyOutline = square(self, nil, copyPosition, vector2(78, 17), palette.border, z + 5, false)
+        d.discordCopyLabel = label(self, nil, copyPosition + vector2(39, 1), "Copy invite", palette.muted, z + 6, true)
+        self:onClick(d.discordButton, function()
+            self:openDiscordInvite()
+        end)
+        self:onClick(d.discordCopyButton, function()
+            self:copyDiscordInvite()
+        end)
+    end
+    if d.discordButton then
+        for _, name in ipairs({
+            "discordButton",
+            "discordOutline",
+            "discordLabel",
+            "discordCopyButton",
+            "discordCopyOutline",
+            "discordCopyLabel",
+        }) do
+            d[name].Visible = code ~= nil
+        end
+    end
+    d.onDrag.Size = vector2(code and self.size.X - 156 or self.size.X, 27)
+    fitText(d.title, self.title, self.size.X - (code and 170 or 20))
+    if code and promptOnFirstLaunch ~= false then
+        task_delay(0, function()
+            if not self.destroyed and self.discordInvite == code then
+                self:openDiscordInvite(true)
+            end
+        end)
+    end
+    return true
 end
 
 do
