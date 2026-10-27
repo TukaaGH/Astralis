@@ -1,0 +1,38 @@
+return {
+	schemaVersion = 1,
+	games = {
+		{
+			gameName = "Fust Survival",
+			gameIDs = { 10769082317 },
+			placeIDs = { 79862723087324 },
+			gitPath = "fustsurvival",
+			version = "1.0.3",
+			releaseRef = "main",
+			enabled = true,
+			executors = {
+				"Potassium",
+				"Volt",
+				"Wave",
+				"Synapse Z",
+				"Real",
+				"Volcano",
+				"Isaeva",
+				"Opiumware",
+				"MacSploit",
+			},
+			executorAliases = {
+				potassium = "Potassium",
+				volt = "Volt",
+				wave = "Wave",
+				synapsez = "Synapse Z",
+				synapzez = "Synapse Z",
+				synz = "Synapse Z",
+				real = "Real",
+				volcano = "Volcano",
+				isaeva = "Isaeva",
+				opiumware = "Opiumware",
+				macsploit = "MacSploit",
+			},
+		},
+	},
+}
