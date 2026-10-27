@@ -12,7 +12,6 @@ return {
 			executors = {
 				"Potassium",
 				"Volt",
-				"Madium",
 				"Wave",
 				"Synapse Z",
 				"Real",
@@ -24,7 +23,6 @@ return {
 			executorAliases = {
 				potassium = "Potassium",
 				volt = "Volt",
-				madium = "Madium",
 				wave = "Wave",
 				synapsez = "Synapse Z",
 				synapzez = "Synapse Z",
