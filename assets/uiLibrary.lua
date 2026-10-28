@@ -314,22 +314,94 @@ local function destroy(owner)
         return
     end
     owner.destroyed = true
-    stopDrag(owner)
+    owner.cleanupErrors = {}
+    local function cleanup(callback)
+        local ok, problem = pcall(callback)
+        if not ok then owner.cleanupErrors[#owner.cleanupErrors + 1] = tostring(problem) end
+    end
+    cleanup(function() stopDrag(owner) end)
+    for _, instance in ipairs(owner.instances or {}) do cleanup(function() instance:Destroy() end) end
+    for _, flag in ipairs(owner.flagObjects or {}) do
+        table.clear(flag.listeners); table.clear(flag.keyListeners)
+    end
+    table.clear(owner.instances or {})
     local windowIndex = table_find(windows, owner)
     if windowIndex then
         table_remove(windows, windowIndex)
     end
     for _, connection in owner.connections or {} do
-        connection:Disconnect()
+        cleanup(function() connection:Disconnect() end)
     end
     for _, notification in table.clone(owner.ownedNotifications or owner.notifications or {}) do
-        notification:destroy()
+        cleanup(function() notification:destroy() end)
     end
     for _, drawing in owner.allDrawings or owner.drawings do
-        drawing:Remove()
+        cleanup(function() drawing:Remove() end)
     end
     table.clear(owner.connections or {})
     table.clear(owner.allDrawings or owner.drawings)
+end
+
+local function newFlag(control, kind, value, options)
+    local window = control.window
+    local flag = {type=kind, value=value, self=control, ignoreConfig=options.ignoreConfig == true,
+        available=true, listeners={}, keyListeners={}}
+    local function subscribe(list, callback, current)
+        assert(type(callback) == "function", "A setting listener must be a function.")
+        local entry = {callback=callback, connected=true}
+        list[#list+1] = entry
+        local ok, problem = pcall(callback, current)
+        if not ok then
+            entry.connected = false
+            local index = table.find(list, entry)
+            if index then table.remove(list, index) end
+            error(problem, 0)
+        end
+        return function()
+            entry.connected=false
+            local index=table.find(list,entry)
+            if index then table.remove(list,index) end
+        end
+    end
+    local function dispatch(list, current)
+        if not flag.available then
+            flag.value, control.enabled = false, false
+            if control.drawings and control.drawings.accent then control.drawings.accent.Transparency=0 end
+            if current then window:notify(flag.unavailableReason or "This feature is unavailable.",4) end
+            return
+        end
+        local failed, firstError = false, nil
+        for _, entry in ipairs(table.clone(list)) do
+            if window.destroyed then break end
+            if entry.connected then
+                local ok, problem = pcall(entry.callback, current)
+                if not ok and not failed then failed, firstError = true, problem end
+            end
+        end
+        if failed then error(firstError, 0) end
+    end
+    function flag:OnChanged(callback)
+        if not self.available then return function() end end
+        return subscribe(self.listeners,callback,self.value)
+    end
+    function flag:OnKeyChanged(callback) return subscribe(self.keyListeners,callback,self.key) end
+    function flag:SetAvailable(available, reason)
+        local ok, problem = true, nil
+        if not available and self.available and (self.type == "toggle" or self.type == "keypicker") then
+            ok, problem = pcall(control.setValue, false, self.key)
+        end
+        self.available, self.unavailableReason=available,reason
+        if not available then
+            table.clear(self.listeners); table.clear(self.keyListeners)
+        end
+        if not ok then error(problem, 0) end
+    end
+    flag.Changed=function(current) dispatch(flag.listeners,current) end
+    flag.KeyChanged=function(current) dispatch(flag.keyListeners,current) end
+    if kind=="keypicker" then flag.key=control.value end
+    if options.flag then window.flags[options.flag]=flag end
+    window.flagObjects=window.flagObjects or {};window.flagObjects[#window.flagObjects+1]=flag
+    return flag
 end
 
 local createClass = function(_table: table?): table
@@ -960,30 +1032,7 @@ toggleClass.new = function(tab, options: table, offset: number)
         drawings = {},
     }, toggleClass)
 
-    do
-        toggle.flag = {
-            type = "toggle",
-            value = toggle.enabled,
-            funcs = {},
-            self = toggle,
-        }
-        toggle.flag.Changed = function(...)
-            local funcs = table.clone(toggle.flag.funcs)
-            for i = 1, #funcs do
-                if toggle.window.destroyed then
-                    break
-                end
-                funcs[i](...)
-            end
-        end
-        if options.flag then
-            function toggle.flag:OnChanged(_function)
-                table_insert(toggle.flag.funcs, _function)
-                _function(toggle.flag.value)
-            end
-            toggle.window.flags[options.flag] = toggle.flag
-        end
-    end
+    toggle.flag = newFlag(toggle, "toggle", toggle.enabled, options)
 
     do
         local d, w, list, z = toggle.drawings, toggle.window, tab.allDrawings, toggle.window.baseZindex
@@ -1066,21 +1115,7 @@ sliderClass.new = function(tab, options: table, offset: number)
         slider.maxIndex = #stringIncrement - dotIndex
     end
 
-    do
-        slider.flag = {
-            type = "slider",
-            value = slider.value,
-            self = slider,
-        }
-        slider.flag.Changed = function(...) end
-        if options.flag then
-            function slider.flag:OnChanged(_function)
-                slider.flag.Changed = _function
-                _function(slider.flag.value)
-            end
-            slider.window.flags[options.flag] = slider.flag
-        end
-    end
+    slider.flag = newFlag(slider, "slider", slider.value, options)
 
     do
         local d, w, list, z = slider.drawings, slider.window, tab.allDrawings, slider.window.baseZindex
@@ -1159,21 +1194,7 @@ dropdownClass.new = function(tab, options: table, offset: number)
         drawings = {},
     }, dropdownClass)
 
-    do
-        dropdown.flag = {
-            type = "dropdown",
-            value = dropdown.value,
-            self = dropdown,
-        }
-        dropdown.flag.Changed = function(...) end
-        if options.flag then
-            function dropdown.flag:OnChanged(_function)
-                dropdown.flag.Changed = _function
-                _function(dropdown.flag.value)
-            end
-            dropdown.window.flags[options.flag] = dropdown.flag
-        end
-    end
+    dropdown.flag = newFlag(dropdown, "dropdown", dropdown.value, options)
 
     do
         local d, w, list, z = dropdown.drawings, dropdown.window, tab.allDrawings, dropdown.window.baseZindex
@@ -1321,29 +1342,7 @@ keypickerClass.new = function(toggle, options: table)
         drawings = {},
     }, keypickerClass)
 
-    do
-        keypicker.flag = {
-            type = "keypicker",
-            key = keypicker.value,
-            value = false,
-            self = keypicker,
-        }
-
-        keypicker.flag.KeyChanged = function(...) end
-        keypicker.flag.Changed = function(...) end
-        if options.flag then
-            function keypicker.flag:OnChanged(_function)
-                keypicker.flag.Changed = _function
-                _function(keypicker.flag.value)
-            end
-            function keypicker.flag:OnKeyChanged(_function)
-                keypicker.flag.KeyChanged = _function
-                _function(keypicker.flag.key)
-            end
-
-            keypicker.window.flags[options.flag] = keypicker.flag
-        end
-    end
+    keypicker.flag = newFlag(keypicker, "keypicker", false, options)
 
     do
         local drawings = keypicker.drawings
@@ -1401,7 +1400,7 @@ keypickerClass.new = function(toggle, options: table)
             keypicker.flag.KeyChanged(keypicker.flag.key)
         end
     end
-    local onKeyPress = function(key)
+    local onKeyPress = function(key, gameProcessed)
         if keypicker.window.destroyed or userInputService:GetFocusedTextBox() then
             return
         end
@@ -1432,7 +1431,7 @@ keypickerClass.new = function(toggle, options: table)
             keypicker.flag.KeyChanged(converted)
             return
         end
-        if keypicker.window.capture or keypicker.value == "None" then
+        if gameProcessed or keypicker.window.capture or keypicker.value == "None" then
             return
         end
         if keypicker.value == (KEY_CONVERSION[name] or name) then
@@ -1498,21 +1497,7 @@ colourpickerClass.new = function(toggle, options: table)
     }, colourpickerClass)
     colourpicker.h, colourpicker.s, colourpicker.v = colourpicker.value:ToHSV()
 
-    do
-        colourpicker.flag = {
-            type = "colourpicker",
-            value = colourpicker.value,
-            self = colourpicker,
-        }
-        colourpicker.flag.Changed = function(...) end
-        if options.flag then
-            function colourpicker.flag:OnChanged(_function)
-                colourpicker.flag.Changed = _function
-                _function(colourpicker.flag.value)
-            end
-            colourpicker.window.flags[options.flag] = colourpicker.flag
-        end
-    end
+    colourpicker.flag = newFlag(colourpicker, "colourpicker", colourpicker.value, options)
 
     do
         local drawings = colourpicker.drawings
@@ -2624,8 +2609,401 @@ function notifyClass:destroy()
     destroy(self)
 end
 
+local newConfigStore = (function(context)
+	local store = {}
+	local function cleanName(name)
+		assert(type(name) == "string", "Enter a config name.")
+		name = name:match("^%s*(.-)%s*$")
+		assert(#name >= 1 and #name <= 48 and name:match("^[%w _-]+$"), "Use 1-48 letters, numbers, spaces, _ or -.")
+		return name
+	end
+	local function file(name) return context.folder .. "/cfg_" .. cleanName(name) .. ".json" end
+	local function decode(body)
+		assert(type(body) == "string" and #body <= 262144, "Config is too large.")
+		local data = context.decode(body)
+		assert(type(data) == "table" and data.schema == 1 and data.game == context.game
+			and type(data.settings) == "table", "This config format or game is unsupported.")
+		context.validate(data.settings)
+		return data
+	end
+	local function writeVerified(path, body, validator)
+		local existed = context.exists(path)
+		local previous = existed and context.read(path) or nil
+		local ok, problem = pcall(function()
+			context.write(path, body)
+			local actual = context.read(path)
+			assert(actual == body, "The config write could not be verified.")
+			validator(actual)
+		end)
+		if not ok then
+			if existed then pcall(context.write, path, previous) else pcall(context.delete, path) end
+			error(problem, 0)
+		end
+	end
+	function store:list()
+		local names, seen = {}, {}
+		for _, path in ipairs(context.list(context.folder)) do
+			local name = path:gsub("\\", "/"):match("/cfg_([^/]+)%.json$")
+			if name then
+				local valid = pcall(cleanName, name)
+				if valid and not seen[name:lower()] then seen[name:lower()] = true; names[#names + 1] = name end
+			end
+		end
+		table.sort(names, function(a, b) return a:lower() < b:lower() end)
+		return names
+	end
+	function store:save(name, overwrite)
+		name = cleanName(name)
+		local path = file(name)
+		assert(overwrite or not context.exists(path), "That config already exists. Select it and use Save.")
+		local settings = context.capture()
+		context.validate(settings)
+		local body = context.encode({ schema = 1, game = context.game, settings = settings })
+		assert(#body <= 262144, "Config is too large.")
+		writeVerified(path, body, decode)
+		return name
+	end
+	function store:load(name)
+		local path = file(name)
+		assert(context.exists(path), "That config no longer exists. Refresh the list.")
+		local data = decode(context.read(path))
+		local old = context.capture()
+		local ok, problem = pcall(context.apply, data.settings)
+		if not ok then
+			local restored = pcall(context.apply, old)
+			error("Config could not be applied" .. (restored and "; previous settings restored: " or ": ") .. tostring(problem), 0)
+		end
+	end
+	function store:delete(name)
+		name = cleanName(name)
+		local path = file(name)
+		assert(context.exists(path), "That config no longer exists.")
+		local startup = self:autoload()
+		local isStartup = startup and startup:lower() == name:lower()
+		local previous = isStartup and context.read(path) or nil
+		context.delete(path)
+		assert(not context.exists(path), "The config could not be deleted.")
+		if isStartup then
+			local ok, problem = pcall(self.setAutoload, self, nil)
+			if not ok then
+				local restored = pcall(function()
+					context.write(path, previous)
+					assert(context.read(path) == previous)
+				end)
+				error("Startup selection could not be cleared" .. (restored and "; config restored: " or "; config restoration failed: ") .. tostring(problem), 0)
+			end
+		end
+	end
+	function store:autoload()
+		local path = context.folder .. "/autoload.json"
+		if not context.exists(path) then return nil end
+		local body = context.read(path)
+		assert(type(body) == "string" and #body <= 1024, "Invalid startup config selection.")
+		local data = context.decode(body)
+		assert(type(data) == "table" and data.schema == 1, "Invalid startup config selection.")
+		if data.name == false then return nil end
+		return cleanName(data.name)
+	end
+	function store:setAutoload(name)
+		if name then
+			name = cleanName(name)
+			assert(context.exists(file(name)), "Save the config before selecting it for startup.")
+			decode(context.read(file(name)))
+		end
+		local body = context.encode({schema = 1, name = name or false})
+		writeVerified(context.folder .. "/autoload.json", body, function(value)
+			local data = context.decode(value); assert(data.schema == 1 and data.name == (name or false))
+		end)
+	end
+	return store
+end)
+
+function tabClass:addLabel(text, offset)
+    offset = math_round(math_clamp(offset or 1, 1, 2))
+    local window = self.window
+    local position = window.drawings["sectionOutline" .. offset].Position + vector2(13, self.offsets[offset])
+    local drawing = label(window, self.allDrawings, position, text, palette.muted, window.baseZindex + 5)
+    drawing.Visible = self.active and window.active
+    self.offsets[offset] += 25
+    local control = {}
+    function control:setText(value) fitText(drawing, value, window.drawings.sectionOutline1.Size.X - 26) end
+    control:setText(text)
+    return control
+end
+
+function dropdownClass:setOptions(options, selected)
+    assert(type(options) == "table", "Dropdown options must be a list.")
+    local values = {}
+    for _, value in ipairs(options) do assert(type(value) == "string"); values[#values + 1] = value end
+    self.options = values
+    self.setValue(table.find(values, selected) and selected or values[1] or "None")
+end
+
+function tabClass:addTextbox(options, offset)
+    options = options or {}
+    offset = math_round(math_clamp(offset or 1, 1, 2))
+    local tab, window = self, self.window
+    local control = {value=options.default or "", maxLength=options.maxLength or 64, window=window, tab=tab}
+    local pos = window.drawings["sectionOutline" .. offset].Position + vector2(13, tab.offsets[offset])
+    local width, z = window.drawings.sectionOutline1.Size.X - 26, window.baseZindex
+    local drawings = {
+        title=label(window, tab.allDrawings, pos, options.text or "", palette.text, z+5),
+        fill=square(window, tab.allDrawings, pos+vector2(0,16), vector2(width,21), palette.raised,z+4),
+        outline=square(window, tab.allDrawings, pos+vector2(0,16), vector2(width,21),palette.border,z+5,false),
+        value=label(window, tab.allDrawings,pos+vector2(5,19),control.value,palette.text,z+6),
+    }
+    control.flag = newFlag(control, "textbox", control.value, options)
+    local gui = Instance.new("ScreenGui")
+    gui.Name, gui.IgnoreGuiInset, gui.ResetOnSpawn = "AstralisTextInput", true, false
+    gui.DisplayOrder = 10000
+    gui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+    local box = Instance.new("TextBox")
+    box.BackgroundTransparency, box.TextTransparency, box.TextStrokeTransparency = 1, 1, 1
+    box.ClearTextOnFocus, box.MultiLine, box.Text = false, false, control.value
+    box.TextSize, box.Font, box.TextXAlignment = GLOBAL_SIZE, Enum.Font.Code, Enum.TextXAlignment.Left
+    box.Visible, box.Parent = false, gui
+    control.input = box
+    window.instances = window.instances or {}; window.instances[#window.instances + 1] = gui
+    local function render()
+        local value = control.value == "" and (options.placeholder or "") or control.value
+        if box:IsFocused() then value ..= "|" end
+        drawings.value.Color = control.value == "" and palette.muted or palette.text
+        fitText(drawings.value, value, width-10)
+    end
+    control.setValue = function(value)
+        if window.destroyed then return end
+        assert(type(value) == "string" and #value <= control.maxLength, "Text exceeds its maximum length.")
+        control.value, control.flag.value = value, value
+        if box.Text ~= value then box.Text = value end
+        render(); control.flag.Changed(value)
+    end
+    connect(window, box:GetPropertyChangedSignal("Text"), function()
+        local value = box.Text:sub(1, control.maxLength):gsub("[\r\n]", "")
+        if box.Text ~= value then box.Text = value end
+        if value ~= control.value then control.setValue(value) end
+    end)
+    connect(window, box.Focused, render)
+    connect(window, box.FocusLost, function() render() end)
+    local function layout()
+        local visible = not window.destroyed and window.active and tab.active
+        box.Position = UDim2.fromOffset(drawings.fill.Position.X, drawings.fill.Position.Y)
+        box.Size = UDim2.fromOffset(drawings.fill.Size.X, drawings.fill.Size.Y)
+        if not visible and box:IsFocused() then box:ReleaseFocus() end
+        box.Visible = visible
+    end
+    connect(window, runService.RenderStepped, layout)
+    window:onClick(drawings.fill, function()
+        if window.active and tab.active then layout(); box:CaptureFocus() end
+    end)
+    for _, drawing in pairs(drawings) do drawing.Visible = tab.active and window.active end
+    tab.offsets[offset] += 47
+    render(); layout()
+    return control
+end
+
+-- Config persistence is a UI-library API; consumers supply only a namespace and callbacks.
+function windowClass:createConfigManager(options)
+    assert(not self.configManager, "This window already has a config manager.")
+    options = options or {}
+    assert(type(options.folder) == "string" and options.folder:match("^[%w_/-]+$")
+        and not options.folder:find("//", 1, true) and options.folder:sub(1, 1) ~= "/", "Invalid config folder.")
+    local window = self
+    local http = game:GetService("HttpService")
+    local ignored = options.ignore or {}
+    local function capture()
+        local settings = {}
+        for name, flag in pairs(window.flags) do
+            if not ignored[name] and not flag.ignoreConfig then
+                if flag.type == "colourpicker" then
+                    settings[name] = { type = flag.type, value = { flag.value.R, flag.value.G, flag.value.B } }
+                elseif flag.type == "keypicker" then
+                    settings[name] = { type = flag.type, key = flag.key, mode = flag.self.mode }
+                else
+                    settings[name] = { type = flag.type, value = flag.value }
+                end
+            end
+        end
+        return settings
+    end
+    local function validate(settings)
+        assert(type(settings) == "table", "Invalid config settings.")
+        local count = 0
+        for name, entry in pairs(settings) do
+            count += 1
+            assert(count <= 512 and type(name) == "string" and type(entry) == "table", "Invalid config settings.")
+            local flag = window.flags[name]
+            if not flag or ignored[name] or flag.ignoreConfig then continue end
+            assert(entry.type == flag.type, "Invalid setting type: " .. name)
+            local value = entry.value
+            if flag.type == "toggle" then assert(type(value) == "boolean", "Invalid toggle: " .. name)
+            elseif flag.type == "slider" then
+                assert(finite(value) and value >= flag.self.min and value <= flag.self.max, "Invalid slider: " .. name)
+            elseif flag.type == "dropdown" then
+                assert(type(value) == "string" and table.find(flag.self.options, value), "Invalid selection: " .. name)
+            elseif flag.type == "colourpicker" then
+                assert(type(value) == "table" and #value == 3, "Invalid colour: " .. name)
+                for _, channel in ipairs(value) do assert(finite(channel) and channel >= 0 and channel <= 1, "Invalid colour channel.") end
+            elseif flag.type == "keypicker" then
+                assert(type(entry.key) == "string" and #entry.key <= 32, "Invalid key binding: " .. name)
+                local valid = entry.key == "None" or entry.key == "MB2"
+                for original, converted in pairs(KEY_CONVERSION) do if entry.key == converted or entry.key == original then valid = true end end
+                if not valid then valid = pcall(function() assert(Enum.KeyCode[entry.key]) end) end
+                assert(valid, "Unknown key binding: " .. name)
+                assert(entry.mode == "hold" or entry.mode == "toggle", "Invalid key mode: " .. name)
+            elseif flag.type == "textbox" then
+                assert(type(value) == "string" and #value <= flag.self.maxLength, "Invalid text: " .. name)
+            else error("Unsupported setting type: " .. name) end
+        end
+    end
+    local function apply(settings)
+        assert(not window.destroyed and not window.configApplying, "The config manager is busy or closed.")
+        validate(settings)
+        window.configApplying = true
+        local ok, problem = pcall(function()
+            if options.beforeLoad then options.beforeLoad() end
+            local keys = {}
+            for name in pairs(settings) do keys[#keys + 1] = name end
+            table.sort(keys)
+            -- Parameters and bindings first; enabled features observe the completed settings.
+            for _, toggles in ipairs({ false, true }) do
+                for _, name in ipairs(keys) do
+                    local entry, flag = settings[name], window.flags[name]
+                    if not flag or ignored[name] or flag.ignoreConfig or (flag.type == "toggle") ~= toggles then continue end
+                    if flag.type == "keypicker" then
+                        flag.self.mode = entry.mode
+                        flag.self.setValue(false, entry.key)
+                    elseif flag.type == "colourpicker" then flag.self.setValue(Color3.new(table.unpack(entry.value)))
+                    else flag.self.setValue(entry.value) end
+                end
+            end
+        end)
+        local finished, finishError = true, nil
+        if options.afterLoad then finished, finishError = pcall(options.afterLoad, ok) end
+        window.configApplying = false
+        if not ok then error(problem, 0) end
+        if not finished then error(finishError, 0) end
+    end
+    local storage = options.storage or { read = readfile, write = writefile, exists = isfile,
+        list = listfiles, delete = delfile, isfolder = isfolder, makefolder = makefolder }
+    local manager = { available = true }
+    for _, key in ipairs({ "read", "write", "exists", "list", "delete", "isfolder", "makefolder" }) do
+        if type(storage[key]) ~= "function" then manager.available = false end
+    end
+    if manager.available then
+        local ok, problem = pcall(function()
+            local folder = ""
+            for component in options.folder:gmatch("[^/]+") do
+                folder = folder == "" and component or folder .. "/" .. component
+                if not storage.isfolder(folder) then storage.makefolder(folder) end
+            end
+        end)
+        manager.available, manager.problem = ok, problem
+    end
+    if manager.available then
+        manager.store = newConfigStore({folder=options.folder, game=tostring(options.game or game.GameId),
+            encode=function(value) return http:JSONEncode(value) end, decode=function(value) return http:JSONDecode(value) end,
+            capture=capture, validate=validate, apply=apply, read=storage.read, write=storage.write,
+            exists=storage.exists, list=storage.list, delete=storage.delete})
+    end
+    local function invoke(method, ...)
+        if not manager.available then return false, "Config storage is unavailable in this executor." end
+        if window.destroyed or manager.busy then return false, "The config manager is busy or closed." end
+        manager.busy = true
+        local results = table.pack(pcall(manager.store[method], manager.store, ...))
+        manager.busy = false
+        return table.unpack(results, 1, results.n)
+    end
+    function manager:list() return invoke("list") end
+    function manager:create(name) return invoke("save", name, false) end
+    function manager:save(name) return invoke("save", name, true) end
+    function manager:load(name) return invoke("load", name) end
+    function manager:delete(name) return invoke("delete", name) end
+    function manager:setAutoload(name) return invoke("setAutoload", name) end
+    function manager:getAutoload() return invoke("autoload") end
+    function manager:loadAutoload()
+        local ok, name = self:getAutoload()
+        if not ok or not name then return ok, name end
+        return self:load(name)
+    end
+    manager.capture, manager.validate = capture, validate
+    manager.apply = function(settings)
+        assert(not window.destroyed and not manager.busy, "The config manager is busy or closed.")
+        validate(settings)
+        local previous = capture()
+        manager.busy = true
+        local ok, problem = pcall(apply, settings)
+        local restored = true
+        if not ok then restored = pcall(apply, previous) end
+        manager.busy = false
+        if not ok then
+            error("Settings could not be applied" .. (restored and "; previous settings restored: " or "; restoration failed: ") .. tostring(problem), 0)
+        end
+    end
+    self.configManager = manager
+    return manager
+end
+
+function tabClass:addConfigSection(manager)
+    local window = self.window
+    local name = self:addTextbox({text="Config name", placeholder="New config", maxLength=48, ignoreConfig=true}, 1)
+    local selector = self:addDropdown({text="Saved config", options={}, default="None"}, 1)
+    local status = self:addLabel("Startup: none", 2)
+    local function notify(ok, problem, success)
+        window:notify(ok and success or tostring(problem), 4)
+        return ok
+    end
+    local function refresh(selected)
+        local ok, names = manager:list()
+        if not ok then window:notify(tostring(names), 4); return end
+        selector:setOptions(names, selected or selector.value)
+        local loaded, startup = manager:getAutoload()
+        status:setText(loaded and ("Startup: " .. (startup or "none")) or "Startup: unavailable")
+    end
+    local function selected()
+        assert(table.find(selector.options, selector.value), "Select a saved config first.")
+        return selector.value
+    end
+    local function action(callback)
+        return function()
+            local ok, problem = pcall(callback)
+            if not ok then window:notify(tostring(problem), 4) end
+        end
+    end
+    self:addButton("Create", action(function()
+        local ok, result = manager:create(name.value)
+        if notify(ok, result, "Config created.") then refresh(result) end
+    end), 1)
+    self:addButton("Save", action(function()
+        local ok, problem = manager:save(selected()); notify(ok, problem, "Config saved.")
+    end), 1)
+    self:addButton("Load", action(function()
+        local ok, problem = manager:load(selected()); notify(ok, problem, "Config loaded.")
+    end), 1)
+    self:addButton("Refresh", function() refresh() end, 1)
+    self:addButton("Delete", action(function()
+        local choice = selected()
+        if manager.deleteName ~= choice or os.clock() > (manager.deleteUntil or 0) then
+            manager.deleteName, manager.deleteUntil = choice, os.clock() + 4
+            window:notify("Click Delete again to remove " .. choice .. ".", 4); return
+        end
+        manager.deleteName = nil
+        local ok, problem = manager:delete(choice)
+        if notify(ok, problem, "Config deleted.") then refresh() end
+    end), 1)
+    self:addButton("Use selected on startup", action(function()
+        local ok, problem = manager:setAutoload(selected())
+        if notify(ok, problem, "Startup config selected.") then refresh() end
+    end), 2)
+    self:addButton("Clear startup config", function()
+        local ok, problem = manager:setAutoload(nil)
+        if notify(ok, problem, "Startup config cleared.") then refresh() end
+    end, 2)
+    if manager.available then refresh() else status:setText("Config storage unavailable") end
+    return { refresh=refresh, name=name, selector=selector, status=status }
+end
+
 return {
     windowClass = windowClass,
     boardClass = boardClass,
     targethudClass = targethudClass,
-}, 5
+}, 6
