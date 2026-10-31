@@ -901,6 +901,10 @@ windowClass.new = function(options: table)
 
             local mousePosition = userInputService:GetMouseLocation()
             local popup = window.popup
+            if popup and popup.handleClick then
+                popup.handleClick(mousePosition)
+                return
+            end
             if
                 popup
                 and not window:isWithin(popup.drawings.background_outline, mousePosition)
@@ -1178,99 +1182,126 @@ sliderClass.new = function(tab, options: table, offset: number)
     return slider
 end
 dropdownClass.new = function(tab, options: table, offset: number)
-    assert(type(tab) == "table", `invalid argument #1 to 'dropdownClass.new' (table expected, got {type(tab)})`)
-    assert(type(options) == "table", `invalid argument #2 to 'dropdownClass.new' (table expected, got {type(options)})`)
-    assert(type(offset) == "number", `invalid argument #3 to 'dropdownClass.new' (number expected, got {type(offset)})`)
-
     offset = math_round(math_clamp(offset, 1, 2))
-    local dropdown = setmetatable({
-        tab = tab,
-        window = tab.window,
-
-        text = options.text,
-        options = options.options,
-        value = options.default or options.options[1] or "None",
-
-        drawings = {},
-    }, dropdownClass)
-
+    assert(type(options.options) == "table", "Dropdown options must be a list.")
+    local values = {}
+    for _, value in ipairs(options.options) do
+        assert(type(value) == "string", "Dropdown values must be strings.")
+        if not table_find(values, value) then values[#values + 1] = value end
+    end
+    local dropdown = setmetatable({tab = tab, window = tab.window, text = options.text or "",
+        options = values, value = table_find(values, options.default) and options.default or values[1] or "None",
+        drawings = {}, onToggle = {}, rows = {}, first = 1, rowHeight = 22, maxRows = 8}, dropdownClass)
     dropdown.flag = newFlag(dropdown, "dropdown", dropdown.value, options)
-
-    do
-        local d, w, list, z = dropdown.drawings, dropdown.window, tab.allDrawings, dropdown.window.baseZindex
-        local pos = w.drawings[`sectionOutline{offset}`].Position + vector2(13, tab.offsets[offset])
-        local width = w.drawings.sectionOutline1.Size.X - 26
-        d.text = label(w, list, pos, dropdown.text, palette.text, z + 5)
-        d.background = square(w, list, pos + vector2(0, 16), vector2(width, 19), palette.raised, z + 4)
-        d.outline = square(w, list, d.background.Position, d.background.Size, palette.border, z + 5, false)
-        d.edge = square(w, list, d.background.Position + vector2(1, 1), vector2(width - 2, 1), palette.edge, z + 5)
-        d.value = label(w, list, d.outline.Position + vector2(width / 2, 2), dropdown.value, palette.text, z + 5, true)
-        d.rightText = label(w, list, d.outline.Position + vector2(width - 10, 2), ">", palette.muted, z + 5, true)
-        d.leftText = label(w, list, d.outline.Position + vector2(10, 2), "<", palette.muted, z + 5, true)
-        d.leftClick = square(w, list, d.outline.Position, vector2(width / 2, 19), palette.panel, 0)
-        d.rightClick =
-            square(w, list, d.outline.Position + vector2(width / 2, 0), vector2(width / 2, 19), palette.panel, 0)
-        d.leftClick.Transparency = 0
-        d.rightClick.Transparency = 0
-        for _, drawing in d do
-            drawing.Visible = tab.active
+    local drawings, window = dropdown.drawings, dropdown.window
+    local width, z = window.drawings.sectionOutline1.Size.X - 26, window.baseZindex
+    local position = window.drawings["sectionOutline" .. offset].Position + vector2(13, tab.offsets[offset])
+    drawings.text = label(window, tab.allDrawings, position, dropdown.text, palette.text, z + 5)
+    drawings.background = square(window, tab.allDrawings, position + vector2(0, 16), vector2(width, 21), palette.raised, z + 4)
+    drawings.outline = square(window, tab.allDrawings, drawings.background.Position, drawings.background.Size, palette.edge, z + 5, false)
+    drawings.value = label(window, tab.allDrawings, drawings.background.Position + vector2(7, 3), dropdown.value, palette.text, z + 6)
+    drawings.arrow = label(window, tab.allDrawings, drawings.background.Position + vector2(width - 13, 3), "v", palette.muted, z + 6, true)
+    local function popupSquare(size, colour, depth, filled)
+        local drawing = square(window, dropdown.onToggle, vector2(0, 0), size, colour, depth, filled)
+        drawing.Visible = false
+        window.popupDrawings = window.popupDrawings or {}
+        window.popupDrawings[drawing] = true
+        return drawing
+    end
+    drawings.background_outline = popupSquare(vector2(width, 20), palette.border, z + 20)
+    drawings.popupFill = popupSquare(vector2(width - 2, 18), palette.panel, z + 21)
+    drawings.scrollTrack = popupSquare(vector2(4, 10), palette.raised, z + 23)
+    drawings.scrollThumb = popupSquare(vector2(4, 10), window.accent, z + 24)
+    for index = 1, dropdown.maxRows do
+        local row = {background = popupSquare(vector2(width - 10, dropdown.rowHeight), palette.raised, z + 22)}
+        row.text = label(window, dropdown.onToggle, vector2(0, 0), "", palette.text, z + 23)
+        window.popupDrawings[row.text] = true
+        row.text.Visible = false
+        dropdown.rows[index] = row
+    end
+    dropdown.layout = function()
+        if window.popup ~= dropdown or window.destroyed then return end
+        local view = viewport()
+        local below = view.Y - (drawings.background.Position.Y + drawings.background.Size.Y + 5)
+        local above = drawings.background.Position.Y - 5
+        local count = math.min(#dropdown.options, dropdown.maxRows, math.max(1, math.floor((math.max(below, above) - 4) / dropdown.rowHeight)))
+        dropdown.visibleRows = count
+        dropdown.first = math_clamp(dropdown.first, 1, math.max(1, #dropdown.options - count + 1))
+        local height = math.max(1, count) * dropdown.rowHeight + 4
+        local top = below >= height and drawings.background.Position.Y + drawings.background.Size.Y + 2 or drawings.background.Position.Y - height - 2
+        local left = math_clamp(drawings.background.Position.X, 2, math.max(2, view.X - width - 2))
+        local base = vector2(left, math_clamp(top, 2, math.max(2, view.Y - height - 2)))
+        drawings.background_outline.Position, drawings.background_outline.Size = base, vector2(width, height)
+        drawings.popupFill.Position, drawings.popupFill.Size = base + vector2(1, 1), vector2(width - 2, height - 2)
+        drawings.background_outline.Visible, drawings.popupFill.Visible = true, true
+        local scrolling = #dropdown.options > count
+        for index, row in ipairs(dropdown.rows) do
+            local option = dropdown.options[dropdown.first + index - 1]
+            local visible = index <= count and option ~= nil
+            row.background.Visible, row.text.Visible = visible, visible
+            row.background.Position, row.background.Size = base + vector2(2, 2 + (index - 1) * dropdown.rowHeight), vector2(width - (scrolling and 12 or 4), dropdown.rowHeight)
+            row.background.Color = option == dropdown.value and palette.raised or palette.panel
+            row.text.Position, row.text.Color = row.background.Position + vector2(6, 4), option == dropdown.value and window.accent or palette.text
+            fitText(row.text, option or "", width - 24)
+        end
+        drawings.scrollTrack.Visible, drawings.scrollThumb.Visible = scrolling, scrolling
+        if scrolling then
+            drawings.scrollTrack.Position, drawings.scrollTrack.Size = base + vector2(width - 7, 3), vector2(4, height - 6)
+            local thumbHeight = math.max(14, (height - 6) * count / #dropdown.options)
+            local progress = (dropdown.first - 1) / math.max(1, #dropdown.options - count)
+            drawings.scrollThumb.Position = drawings.scrollTrack.Position + vector2(0, progress * (height - 6 - thumbHeight))
+            drawings.scrollThumb.Size = vector2(4, thumbHeight)
         end
     end
-
-    local rightOnClicked = function()
-        if dropdown.window.destroyed then
-            return
-        end
-        local index = table_find(dropdown.options, dropdown.value) or 0
-
-        local value = dropdown.options[index + 1]
-        if value == nil then
-            value = dropdown.options[1] or "None"
-        end
-
-        dropdown.value = value
-        fitText(dropdown.drawings.value, value, dropdown.drawings.outline.Size.X - 40)
-
-        dropdown.flag.value = dropdown.value
-        dropdown.flag.Changed(dropdown.value)
-    end
-
-    local leftOnClicked = function()
-        if dropdown.window.destroyed then
-            return
-        end
-        local index = table_find(dropdown.options, dropdown.value) or 2
-
-        local value = dropdown.options[index - 1]
-        if value == nil then
-            value = dropdown.options[#dropdown.options] or "None"
-        end
-
-        dropdown.value = value
-        fitText(dropdown.drawings.value, value, dropdown.drawings.outline.Size.X - 40)
-
-        dropdown.flag.value = dropdown.value
-        dropdown.flag.Changed(dropdown.value)
-    end
-
     dropdown.setValue = function(value)
-        if dropdown.window.destroyed then
+        if window.destroyed then return end
+        assert(table_find(dropdown.options, value) or (#dropdown.options == 0 and value == "None"), "Invalid dropdown selection.")
+        dropdown.value, dropdown.flag.value = value, value
+        fitText(drawings.value, value, width - 28)
+        dropdown.flag.Changed(value)
+        dropdown.layout()
+    end
+    dropdown.handleClick = function(point)
+        if window:isWithin(drawings.background, point) then closePopup(window); return end
+        if not window:isWithin(drawings.background_outline, point) then closePopup(window); return end
+        if drawings.scrollTrack.Visible and point.X >= drawings.scrollTrack.Position.X - 3 then
+            startDrag(window, function()
+                local mouse = userInputService:GetMouseLocation()
+                local track = drawings.scrollTrack
+                local ratio = math_clamp((mouse.Y - track.Position.Y) / track.Size.Y, 0, 1)
+                dropdown.first = 1 + math_round(ratio * math.max(0, #dropdown.options - dropdown.visibleRows))
+                dropdown.layout()
+            end)
             return
         end
-        dropdown.value = value
-        fitText(dropdown.drawings.value, value, dropdown.drawings.outline.Size.X - 40)
-
-        dropdown.flag.value = dropdown.value
-        dropdown.flag.Changed(dropdown.value)
+        for index, row in ipairs(dropdown.rows) do
+            if row.background.Visible and window:isWithin(row.background, point) then
+                local value = dropdown.options[dropdown.first + index - 1]
+                closePopup(window)
+                dropdown.setValue(value)
+                return
+            end
+        end
     end
-
-    dropdown.window:onClick(dropdown.drawings.rightClick, rightOnClicked)
-    dropdown.window:onClick(dropdown.drawings.leftClick, leftOnClicked)
-
-    tab.offsets[offset] += 43
-
-    fitText(dropdown.drawings.value, dropdown.value, dropdown.drawings.outline.Size.X - 40)
-    fitText(dropdown.drawings.text, dropdown.text, dropdown.drawings.outline.Size.X)
+    window:onClick(drawings.background, function()
+        if dropdown.flag.available == false or #dropdown.options == 0 then return end
+        closePopup(window)
+        window.popup = dropdown
+        dropdown.first = math.max(1, (table_find(dropdown.options, dropdown.value) or 1) - 3)
+        dropdown.layout()
+    end)
+    connect(window, userInputService.InputChanged, function(input)
+        if window.popup ~= dropdown or input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
+        if not window:isWithin(drawings.background_outline, userInputService:GetMouseLocation()) then return end
+        dropdown.first -= input.Position.Z > 0 and 1 or -1
+        dropdown.layout()
+    end)
+    for _, drawing in drawings do
+        if not window.popupDrawings or not window.popupDrawings[drawing] then drawing.Visible = tab.active and window.active end
+    end
+    tab.offsets[offset] += 45
+    fitText(drawings.value, dropdown.value, width - 28)
+    fitText(drawings.text, dropdown.text, width)
     return dropdown
 end
 buttonClass.new = function(tab, text: string, onClick, offset: number)
@@ -2462,6 +2493,7 @@ do
                 toggleDrawings[i].Visible = false
             end
         end
+        if self.window.refreshSections then self.window.refreshSections() end
     end
 
     function tabClass:addToggle(options: table, offset: number)
@@ -2718,6 +2750,135 @@ local newConfigStore = (function(context)
 	return store
 end)
 
+function tabClass:addSpacer(height, offset)
+    offset = math_round(math_clamp(offset or 1, 1, 2))
+    self.offsets[offset] += math_round(math_clamp(height or 12, 0, 100))
+end
+
+function tabClass:addSeparator(text, offset)
+    offset = math_round(math_clamp(offset or 1, 1, 2))
+    local window = self.window
+    local position = window.drawings["sectionOutline" .. offset].Position + vector2(13, self.offsets[offset] + 6)
+    local width = window.drawings.sectionOutline1.Size.X - 26
+    local title = label(window, self.allDrawings, position, text or "", palette.muted, window.baseZindex + 6)
+    fitText(title, text or "", width - 24)
+    local inset = title.TextBounds.X > 0 and title.TextBounds.X + 10 or 0
+    local line = square(window, self.allDrawings, position + vector2(inset, 7), vector2(math.max(1, width - inset), 1), palette.edge, window.baseZindex + 6)
+    title.Visible, line.Visible = self.active and window.active, self.active and window.active
+    self.offsets[offset] += 29
+    return title
+end
+
+function windowClass:installSectionScrolling()
+    if self.sectionScrolling then return end
+    self.sectionScrolling = true
+    local metadata = {}
+    local states = {}
+    local bars = {}
+    for column = 1, 2 do
+        local track = square(self, nil, vector2(0, 0), vector2(3, 1), palette.raised, self.baseZindex + 8)
+        local thumb = square(self, nil, vector2(0, 0), vector2(3, 1), self.accent, self.baseZindex + 9)
+        bars[column] = {track = track, thumb = thumb}
+        track.Visible, thumb.Visible = false, false
+    end
+    local function activeTab()
+        for _, tab in ipairs(self.tabSettings.tabs) do if tab.active then return tab end end
+    end
+    local function refresh()
+        if self.destroyed then return end
+        local tab = activeTab()
+        for column, bar in ipairs(bars) do
+            local panel = self.drawings["sectionOutline" .. column]
+            local height = panel.Size.Y - 16
+            local maximum = tab and math.max(0, tab.offsets[column] - height) or 0
+            tab = tab or activeTab()
+            if tab then
+                tab.scroll = tab.scroll or {0, 0}
+                tab.scroll[column] = math_clamp(tab.scroll[column], 0, maximum)
+            end
+            local visible = self.active and tab ~= nil and maximum > 0
+            bar.track.Visible, bar.thumb.Visible = visible, visible
+            bar.track.Position, bar.track.Size = panel.Position + vector2(panel.Size.X - 6, 8), vector2(3, height)
+            local thumbHeight = math.max(18, height * height / math.max(height, tab and tab.offsets[column] or height))
+            bar.thumb.Size = vector2(3, thumbHeight)
+            bar.thumb.Position = bar.track.Position + vector2(0, maximum > 0 and tab.scroll[column] / maximum * (height - thumbHeight) or 0)
+        end
+        for _, item in ipairs(self.tabSettings.tabs) do
+            item.scroll = item.scroll or {0, 0}
+            local previous = states[item]
+            local firstPanel, secondPanel = self.drawings.sectionOutline1, self.drawings.sectionOutline2
+            local state = {self.active, item.active, #item.allDrawings, #item.toggleDrawings,
+                item.scroll[1], item.scroll[2], firstPanel.Position.X, firstPanel.Position.Y,
+                secondPanel.Position.X, secondPanel.Position.Y, firstPanel.Size.Y, secondPanel.Size.Y}
+            local changed = previous == nil
+            if previous then
+                for index, value in ipairs(state) do if previous[index] ~= value then changed = true; break end end
+            end
+            if not changed then continue end
+            states[item] = state
+            local popupSet = {}
+            for _, drawing in ipairs(item.toggleDrawings) do popupSet[drawing] = true end
+            for _, drawing in ipairs(item.allDrawings) do
+                if popupSet[drawing] or (self.popupDrawings and self.popupDrawings[drawing]) then continue end
+                local info = metadata[drawing]
+                if not info then
+                    local midpoint = self.drawings.sectionOutline2.Position.X
+                    local column = drawing.Position.X >= midpoint and 2 or 1
+                    local panel = self.drawings["sectionOutline" .. column]
+                    info = {column = column, top = drawing.Position.Y - panel.Position.Y}
+                    metadata[drawing] = info
+                end
+                local panel = self.drawings["sectionOutline" .. info.column]
+                local top = info.top - item.scroll[info.column]
+                drawing.Position = vector2(drawing.Position.X, panel.Position.Y + top)
+                if not info.extent then
+                    local succeeded, size = pcall(function() return drawing.Size end)
+                    info.extent = succeeded and typeof(size) == "Vector2" and size.Y or GLOBAL_SIZE + 3
+                end
+                local extent = info.extent
+                drawing.Visible = self.active and item.active and top >= 5 and top + extent <= panel.Size.Y - 5
+            end
+        end
+    end
+    connect(self, userInputService.InputChanged, function(input)
+        if not self.active or self.popup or input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
+        local point, tab = userInputService:GetMouseLocation(), activeTab()
+        if not tab then return end
+        for column = 1, 2 do
+            if self:isWithin(self.drawings["sectionOutline" .. column], point) then
+                tab.scroll = tab.scroll or {0, 0}
+                tab.scroll[column] += input.Position.Z > 0 and -44 or 44
+                refresh()
+                return
+            end
+        end
+    end)
+    for column, bar in ipairs(bars) do
+        self:onClick(bar.track, function()
+            local tab = activeTab()
+            if not tab then return end
+            closePopup(self)
+            startDrag(self, function()
+                local point = userInputService:GetMouseLocation()
+                local ratio = math_clamp((point.Y - bar.track.Position.Y) / bar.track.Size.Y, 0, 1)
+                tab.scroll = tab.scroll or {0, 0}
+                tab.scroll[column] = ratio * math.max(0, tab.offsets[column] - bar.track.Size.Y)
+                refresh()
+            end)
+        end)
+    end
+    local elapsed = 0
+    connect(self, runService.RenderStepped, function(delta)
+        if not self.active then return end
+        elapsed += delta
+        if elapsed < 1 / 30 then return end
+        elapsed = 0
+        refresh()
+    end)
+    self.refreshSections = refresh
+    refresh()
+end
+
 function tabClass:addLabel(text, offset)
     offset = math_round(math_clamp(offset or 1, 1, 2))
     local window = self.window
@@ -2736,6 +2897,7 @@ function dropdownClass:setOptions(options, selected)
     local values = {}
     for _, value in ipairs(options) do assert(type(value) == "string"); values[#values + 1] = value end
     self.options = values
+    if self.window.popup == self then closePopup(self.window) end
     self.setValue(table.find(values, selected) and selected or values[1] or "None")
 end
 
@@ -2902,7 +3064,8 @@ function windowClass:createConfigManager(options)
     if manager.available then
         manager.store = newConfigStore({folder=options.folder, game=tostring(options.game or game.GameId),
             encode=function(value) return http:JSONEncode(value) end, decode=function(value) return http:JSONDecode(value) end,
-            capture=capture, validate=validate, apply=apply, read=storage.read, write=storage.write,
+            capture=capture, validate=function(value) validate(options.migrate and options.migrate(value) or value) end,
+            apply=function(value) apply(options.migrate and options.migrate(value) or value) end, read=storage.read, write=storage.write,
             exists=storage.exists, list=storage.list, delete=storage.delete})
     end
     local function invoke(method, ...)
@@ -3006,4 +3169,4 @@ return {
     windowClass = windowClass,
     boardClass = boardClass,
     targethudClass = targethudClass,
-}, 6
+}, 7
