@@ -1,3 +1,3 @@
-**Astralis** `1.0.4`
+**Astralis** `1.0.5`
 
-Added configs and autoshoot. Improved team checks and manipulation. Fixed keybinds, freecam and config loading.
+Updated anticheat bypass and reworked prediction. Added Fullbright, skyboxes, No weather and No recoil.
