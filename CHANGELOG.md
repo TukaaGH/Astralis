@@ -1,3 +1,3 @@
-**Astralis** `1.0.5`
+**Astralis** `1.0.6`
 
-Updated anticheat bypass and reworked prediction. Added arm and weapon chams with materials and textures, hit sounds, entity and crate ESP, Always auto, Fullbright, skyboxes and No weather. Added a prediction toggle and No recoil; removed spread adjustment.
+Improved Silent aim reliability and movement prediction, optimized targeting performance, and fixed Always auto and Autoshoot. Added No spread for supported guns and updated anticheat compatibility.

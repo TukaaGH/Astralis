@@ -6,8 +6,8 @@ return {
 			gameIDs = { 10769082317 },
 			placeIDs = { 79862723087324 },
 			gitPath = "fustsurvival",
-			version = "1.0.5",
-			releaseRef = "v1.0.5",
+			version = "1.0.6",
+			releaseRef = "v1.0.6",
 			enabled = true,
 			executors = {
 				"Potassium",
