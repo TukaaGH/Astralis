@@ -1,3 +1,3 @@
-**Astralis** `1.0.6`
+**Astralis** `1.0.7`
 
-Improved Silent aim reliability and movement prediction, optimized targeting performance, and fixed Always auto and Autoshoot. Added No spread for supported guns and updated anticheat compatibility.
+Improved performance, removed Always auto and Autoshoot, removed report-blocking that may have caused reported kicks, removed Halloween crate detection after the event ended, and kept old saves loading. Every feature now starts off by default.
