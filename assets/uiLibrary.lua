@@ -4973,53 +4973,65 @@ function Library:KeybindList(Opts)
 
 	local Rows = {};
 	local function Rebuild()
-		for _, R in Rows do R:Destroy() end;
-		table.clear(Rows);
+		if Library.Destroyed or not Gui.Parent then return end
+		local Present = {}
 		for I, Entry in Library.Keybinds do
 			local Key = Entry.GetKey and Entry.GetKey() or nil;
 			if Key ~= nil and (not Entry.Available or Entry.Available()) then
-				local Row = Library:CreateInstance("Frame", {
-					Name                   = "Entry";
-					Parent                 = Entries;
-					BackgroundTransparency = 1;
-					BorderSizePixel        = 0;
-					Size                   = UDim2.new(1, 0, 0, 13);
-					LayoutOrder            = I;
-				});
-				local DisplayName = tostring(Entry.Name or "?");
-				local NameLbl = Library:CreateInstance("TextLabel", {
-					Parent                 = Row;
-					AnchorPoint            = Vector2.new(0, 0.5);
-					Position               = UDim2.new(0, 0, 0.5, 0);
-					Size                   = UDim2.new(1, -50, 1, 0);
-					BackgroundTransparency = 1;
-					Text                   = DisplayName;
-					RichText               = true;
-					TextColor3             = Color3.fromHex("BFC4CC");
-					TextSize               = 12;
-					TextXAlignment         = Enum.TextXAlignment.Left;
-					TextYAlignment         = Enum.TextYAlignment.Center;
-				});
-				local KeyLbl = Library:CreateInstance("TextLabel", {
-					Parent                 = Row;
-					AnchorPoint            = Vector2.new(1, 0.5);
-					Position               = UDim2.new(1, 0, 0.5, 0);
-					Size                   = UDim2.new(0, 46, 1, 0);
-					BackgroundTransparency = 1;
-					Text                   = KeyName(Key);
-					TextColor3             = Library.Accent;
-					TextSize               = 12;
-					TextXAlignment         = Enum.TextXAlignment.Right;
-					TextYAlignment         = Enum.TextYAlignment.Center;
-				});
-				Library:RegisterAccent(KeyLbl, "TextColor3");
-				if ProggyCleanFont then
-					NameLbl.FontFace = ProggyCleanFont;
-					KeyLbl.FontFace  = ProggyCleanFont;
-				end;
-				table.insert(Rows, Row);
+				Present[Entry] = true
+				local Ref = Rows[Entry]
+				if not Ref then
+					local Row = Library:CreateInstance("Frame", {
+						Name                   = "Entry";
+						Parent                 = Entries;
+						BackgroundTransparency = 1;
+						BorderSizePixel        = 0;
+						Size                   = UDim2.new(1, 0, 0, 13);
+						LayoutOrder            = I;
+					});
+					local DisplayName = tostring(Entry.Name or "?");
+					local NameLbl = Library:CreateInstance("TextLabel", {
+						Parent                 = Row;
+						AnchorPoint            = Vector2.new(0, 0.5);
+						Position               = UDim2.new(0, 0, 0.5, 0);
+						Size                   = UDim2.new(1, -50, 1, 0);
+						BackgroundTransparency = 1;
+						Text                   = DisplayName;
+						RichText               = true;
+						TextColor3             = Color3.fromHex("BFC4CC");
+						TextSize               = 12;
+						TextXAlignment         = Enum.TextXAlignment.Left;
+						TextYAlignment         = Enum.TextYAlignment.Center;
+					});
+					local KeyLbl = Library:CreateInstance("TextLabel", {
+						Parent                 = Row;
+						AnchorPoint            = Vector2.new(1, 0.5);
+						Position               = UDim2.new(1, 0, 0.5, 0);
+						Size                   = UDim2.new(0, 46, 1, 0);
+						BackgroundTransparency = 1;
+						Text                   = KeyName(Key);
+						TextColor3             = Library.Accent;
+						TextSize               = 12;
+						TextXAlignment         = Enum.TextXAlignment.Right;
+						TextYAlignment         = Enum.TextYAlignment.Center;
+					});
+					Library:RegisterAccent(KeyLbl, "TextColor3");
+					if ProggyCleanFont then
+						NameLbl.FontFace = ProggyCleanFont;
+						KeyLbl.FontFace  = ProggyCleanFont;
+					end;
+					Ref = {frame = Row, name = NameLbl, key = KeyLbl}
+					Rows[Entry] = Ref
+				end
+				Ref.frame.Visible = true
+				Ref.frame.LayoutOrder = I
+				Ref.name.Text = tostring(Entry.Name or "?")
+				Ref.key.Text = KeyName(Key)
 			end;
 		end;
+        for Entry, Ref in pairs(Rows) do
+            if not Present[Entry] then Ref.frame.Visible = false end
+        end
 	end;
 	Library:OnKeybindChange(Rebuild);
 
@@ -5565,6 +5577,7 @@ function Library:Playerlist(Opts)
 	local function IsModerator(Player) return Opts.IsModerator and Opts.IsModerator(Player) or false end
 
 	local function BuildRow(Player, Idx)
+		local function rowConnection(signal, callback) return signal:Connect(callback) end
 		local State = GetStateFromTables(Player);
 		PlayerStates[Player] = State;
 		local IsMod = IsModerator(Player);
@@ -5655,15 +5668,15 @@ function Library:Playerlist(Opts)
 		});
 		if ProggyCleanFont then StateLbl.FontFace = ProggyCleanFont end;
 
-		Library:Connection(Btn.MouseEnter, function()
+		rowConnection(Btn.MouseEnter, function()
 			TweenService:Create(Row, TweenInfo.new(0.1), { BackgroundTransparency = 0.7 }):Play();
 		end);
-		Library:Connection(Btn.MouseLeave, function()
+		rowConnection(Btn.MouseLeave, function()
 			TweenService:Create(Row, TweenInfo.new(0.1), { BackgroundTransparency = 1 }):Play();
 		end);
 
 		if Player ~= LP then
-			Library:Connection(Btn.MouseButton1Click, function()
+			rowConnection(Btn.MouseButton1Click, function()
 				local Cur = GetStateFromTables(Player);
 				local Next = Cur == "Neutral" and "Friendly" or Cur == "Friendly" and "Priority" or "Neutral";
 
@@ -5672,6 +5685,7 @@ function Library:Playerlist(Opts)
 
 				TweenService:Create(Row, TweenInfo.new(0.08), { BackgroundTransparency = 0.25 }):Play();
 				task.delay(0.1, function()
+					if not Row.Parent or Library.Destroyed then return end
 					TweenService:Create(Row, TweenInfo.new(0.14), { BackgroundTransparency = 1 }):Play();
 				end);
 
@@ -5680,41 +5694,47 @@ function Library:Playerlist(Opts)
 			end);
 		end;
 
-		return Row;
+		return {frame = Row, state = StateLbl, moderator = ModLbl};
 	end;
 
-	local function RefreshPlayerList()
-		for _, Ref in RowRefs do
-			if Ref and Ref.Parent then Ref:Destroy() end;
-		end;
-		table.clear(RowRefs);
+	local function RefreshPlayerList(Removing)
+        if Library.Destroyed then return end
+        local SearchText = string.lower(SearchInput.Text)
+        local Present, Ordered = {}, {}
+        if LP and LP ~= Removing then Ordered[#Ordered + 1] = LP end
+        for _, Player in Players:GetPlayers() do
+            if Player ~= LP and Player ~= Removing then Ordered[#Ordered + 1] = Player end
+        end
+        local Idx = 0
+        for _, Player in ipairs(Ordered) do
+            Present[Player] = true
+            local Ref = RowRefs[Player]
+            if not Ref or not Ref.frame.Parent then
+                Ref = BuildRow(Player, Idx)
+                RowRefs[Player] = Ref
+            end
+            local Visible = SearchText == "" or string.find(string.lower(Player.Name), SearchText, 1, true) ~= nil
+            Ref.frame.Visible = Visible
+            if Visible then Ref.frame.LayoutOrder = Idx; Idx += 1 end
+            local State = GetStateFromTables(Player)
+            PlayerStates[Player] = State
+            Ref.state.Text, Ref.state.TextColor3 = GetStateText(Player, State), GetStateColor(Player, State)
+            local IsMod = IsModerator(Player)
+            Ref.moderator.RichText = IsMod
+            Ref.moderator.Text = IsMod and '[<font color="#' .. Library.Accent:ToHex() .. '">M</font>]' or ""
+        end
+        for Player, Ref in pairs(RowRefs) do
+            if not Present[Player] then
+                Ref.frame:Destroy()
+                RowRefs[Player], PlayerStates[Player] = nil, nil
+            end
+        end
+    end
 
-		local SearchText = string.lower(SearchInput.Text);
-		local Idx = 0;
-
-		if LP and (SearchText == "" or string.find(string.lower(LP.Name), SearchText, 1, true)) then
-			table.insert(RowRefs, BuildRow(LP, Idx));
-			Idx += 1;
-		end;
-
-		for _, Player in Players:GetPlayers() do
-			if Player ~= LP then
-				if SearchText == "" or string.find(string.lower(Player.Name), SearchText, 1, true) then
-					table.insert(RowRefs, BuildRow(Player, Idx));
-					Idx += 1;
-				end;
-			end;
-		end;
-	end;
-
-	RefreshPlayerList();
-	Library:Connection(Players.PlayerAdded, function() RefreshPlayerList() end);
-	Library:Connection(Players.PlayerRemoving, function(Player)
-		-- Oyuncu ayrıldığında tablolardan temizle
-
-		RefreshPlayerList();
-	end);
-	Library:Connection(SearchInput:GetPropertyChangedSignal("Text"), RefreshPlayerList);
+    RefreshPlayerList()
+    Library:Connection(Players.PlayerAdded, function() RefreshPlayerList() end)
+    Library:Connection(Players.PlayerRemoving, RefreshPlayerList)
+    Library:Connection(SearchInput:GetPropertyChangedSignal("Text"), function() RefreshPlayerList() end)
 
 	local FadeOriginals = nil;
 	local FadeToken = 0;
