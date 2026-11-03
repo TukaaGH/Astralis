@@ -1,16 +1,14 @@
 local context = ...
-if type(context) ~= "table" or context.schemaVersion ~= 1 or type(context.load) ~= "function" then
-	error("Astralis: start this game through betaloader.lua.", 0)
+if type(context) ~= "table" or context.schemaVersion ~= 1 or type(context.load) ~= "function"
+    or type(context.root) ~= "string" or type(context.setEnvironment) ~= "function" then
+    error("Astralis: start this build through the BETA loader.", 0)
 end
-if game.GameId ~= 10769082317 then
-	error("Astralis: this build requires Fust Survival.", 0)
-end
-
-local player = game:GetService("Players").LocalPlayer
-local scripts = player and player:WaitForChild("PlayerScripts", 30)
-if not scripts or not scripts:WaitForChild("FustGuns", 30) or not scripts:WaitForChild("FustGather", 30)
-	or not scripts:WaitForChild("FustCombat", 30) then
-	error("Astralis: Fust controllers are not ready. Retry after spawning.", 0)
-end
-
-return context.load(context.root .. "fustsurvival/obfuscated-beta.lua")
+if game.GameId ~= 10769082317 then error("Astralis: this build requires Fust Survival.", 0) end
+local create = context.load(context.root .. "assets/executorApi.lua")
+if type(create) ~= "function" then error("Astralis: executor adapter could not be loaded.", 0) end
+local environment, missing = create(getfenv(1))
+if not environment then error("Astralis: " .. tostring(context.executor) .. " is missing " .. tostring(missing) .. ".", 0) end
+context.setEnvironment(environment)
+local ready = context.load(context.root .. "fustsurvival/emulator.lua", context)
+if ready ~= true then error("Astralis: emulator initialization did not complete.", 0) end
+return context.load(context.root .. "fustsurvival/obfuscated.lua")

@@ -54,11 +54,13 @@ local function fetch(url)
 	return body
 end
 
+local runtimeEnvironment
 local function execute(url, ...)
 	local compiled, chunk = pcall(loadstring, fetch(url), "=Astralis/loader")
 	if not compiled or type(chunk) ~= "function" then
 		fail("the downloaded script could not be compiled.")
 	end
+	if runtimeEnvironment then setfenv(chunk, runtimeEnvironment) end
 	local ok, result = pcall(chunk, ...)
 	if not ok then
 		fail("initialization failed: " .. tostring(result))
@@ -82,7 +84,7 @@ while not players.LocalPlayer do
 	task.wait(0.1)
 end
 
-local registry = execute(repositoryRoot .. "main/supportedGames.lua")
+local registry = execute(repositoryRoot .. "BETA/supportedGames.lua")
 if type(registry) ~= "table" or registry.schemaVersion ~= 1 or type(registry.games) ~= "table" then
 	fail("the game registry is invalid.")
 end
@@ -138,4 +140,5 @@ return execute(releaseRoot .. selected.gitPath .. "/main.lua", {
 	game = selected,
 	root = releaseRoot,
 	load = execute,
+	setEnvironment = function(environment) runtimeEnvironment = environment end,
 })
