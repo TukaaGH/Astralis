@@ -6,7 +6,7 @@ return {
 			gameIDs = { 10769082317 },
 			placeIDs = { 79862723087324 },
 			gitPath = "fustsurvival",
-			version = "1.1.0-beta.1",
+			version = "1.1.0-beta.2",
 			releaseRef = "BETA",
 			enabled = true,
 			executors = {
