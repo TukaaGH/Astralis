@@ -1,3 +1,3 @@
-**Astralis** `1.0.8`
+**Astralis** `1.0.9`
 
 Fixed Astralis.
