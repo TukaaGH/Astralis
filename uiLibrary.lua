@@ -6780,48 +6780,83 @@ function Library:_BuildPreview(Parent, Opts)
 	local LastPos  = Vector3.zero;
 
 	local function StopViewing()
-		ViewportCamera = nil;
-		Model = nil;
-		Viewport:ClearAllChildren();
-	end;
+		ViewportCamera = nil
+		Model = nil
+		Viewport.CurrentCamera = nil
+		Viewport:ClearAllChildren()
+	end
+
+	local function CloneVisiblePart(Item)
+		local Saved = Item.Archivable
+		Item.Archivable = true
+		local Ok, Result = pcall(Item.Clone, Item)
+		Item.Archivable = Saved
+		if not Ok or not Result then return end
+		for _, Child in Result:GetDescendants() do
+			if Child:IsA("LuaSourceContainer") or Child:IsA("JointInstance") or Child:IsA("Constraint")
+				or Child:IsA("ParticleEmitter") or Child:IsA("Trail") or Child:IsA("Beam") or Child:IsA("Sound") then
+				Child:Destroy()
+			end
+		end
+		if Result:IsA("BasePart") then
+			Result.Anchored = true
+			Result.CanCollide = false
+			Result.CanTouch = false
+			Result.CanQuery = false
+		end
+		return Result
+	end
 
 	local function ViewModel(Item)
-		if not Item then return end;
-		StopViewing();
-		if Item:IsA("Model") then
-			local originalArchivable = Item.Archivable
-			Item.Archivable = true
-			local cloned, result = pcall(Item.Clone, Item)
-			Item.Archivable = originalArchivable
-			if not cloned or not result then return end
-			Model = result
-			for _, child in Model:GetDescendants() do if child:IsA("LuaSourceContainer") then child:Destroy() end end
-			Model.Parent = Viewport;
-			if not Model.PrimaryPart then
-				local Found = false;
-				for _, Child in Model:GetDescendants() do
-					if Child:IsA("BasePart") then
-						Model.PrimaryPart = Child;
-						Found = true;
-						break;
-					end;
-				end;
-				if not Found then Model:Destroy(); Model = nil; return end;
-			end;
+		if Library.Destroyed or not Item then return false end
+		local NextModel
+		if Item:IsA("Model") and Opts.ExternalRenderer then
+			local Root = Item:FindFirstChild("HumanoidRootPart") or Item.PrimaryPart
+			local Humanoid = Item:FindFirstChildOfClass("Humanoid")
+			if not Root or not Root:IsA("BasePart") or not Humanoid then return false end
+			NextModel = Instance.new("Model")
+			NextModel.Name = Item.Name
+			local Count = 0
+			for _, Child in Item:GetChildren() do
+				if Child:IsA("BasePart") or Child:IsA("Shirt") or Child:IsA("Pants")
+					or Child:IsA("ShirtGraphic") or Child:IsA("BodyColors") then
+					local Copy = CloneVisiblePart(Child)
+					if Copy then
+						Copy.Parent = NextModel
+						if Child == Root then NextModel.PrimaryPart = Copy end
+						if Child:IsA("BasePart") then Count += 1 end
+					end
+				end
+			end
+			if Count < 2 or not NextModel.PrimaryPart then NextModel:Destroy(); return false end
+			local PreviewHumanoid = Instance.new("Humanoid")
+			PreviewHumanoid.RigType = Humanoid.RigType
+			PreviewHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+			PreviewHumanoid.Parent = NextModel
+		elseif Item:IsA("Model") then
+			NextModel = CloneVisiblePart(Item)
+			if not NextModel then return false end
+			if not NextModel.PrimaryPart then NextModel.PrimaryPart = NextModel:FindFirstChildWhichIsA("BasePart", true) end
+			if not NextModel.PrimaryPart then NextModel:Destroy(); return false end
 		elseif Item:IsA("BasePart") then
-			Model = Instance.new("Model");
-			Model.Parent = Viewport;
-			local Clone = Item:Clone();
-			Clone.Parent = Model;
-			Clone.CFrame = CFrame.new();
-			Model.PrimaryPart = Clone;
+			local Copy = CloneVisiblePart(Item)
+			if not Copy then return false end
+			NextModel = Instance.new("Model")
+			Copy.Parent = NextModel
+			Copy.CFrame = CFrame.new()
+			NextModel.PrimaryPart = Copy
 		else
-			return;
-		end;
-		OriginalModel = Item;
-		ViewportCamera = Library:CreateInstance("Camera", { Parent = Viewport; FieldOfView = 60 });
-		Viewport.CurrentCamera = ViewportCamera;
-	end;
+			return false
+		end
+		StopViewing()
+		Model = NextModel
+		Model.Parent = Viewport
+		OriginalModel = Item
+		ViewportCamera = Library:CreateInstance("Camera", { Parent = Viewport; FieldOfView = 60 })
+		Viewport.CurrentCamera = ViewportCamera
+		return true
+	end
+
 
 	local function BoxSolve(Root)
 		local UpVec    = Root.CFrame.UpVector;
@@ -6909,13 +6944,37 @@ function Library:_BuildPreview(Parent, Opts)
 		end;
 	end);
 
+	local PreviewPlayer = game:GetService("Players").LocalPlayer
+	local ModelRevision = 0
+	local function QueueCharacter(Character)
+		if Library.Destroyed or not Character then return end
+		ModelRevision += 1
+		local Mine = ModelRevision
+		task.spawn(function()
+			local Deadline = os.clock() + 5
+			local StableSince, PreviousCount = os.clock(), -1
+			while not Library.Destroyed and Mine == ModelRevision and PreviewPlayer.Character == Character do
+				local Count = #Character:GetChildren()
+				if Count ~= PreviousCount then PreviousCount, StableSince = Count, os.clock() end
+				if Character.Parent and os.clock() - StableSince >= 0.15 and ViewModel(Character) then return end
+				if os.clock() >= Deadline then return end
+				task.wait(0.1)
+			end
+		end)
+	end
+	if PreviewPlayer and Opts.ExternalRenderer then
+		Library:Connection(PreviewPlayer.CharacterAdded, QueueCharacter)
+		Library:Connection(PreviewPlayer.CharacterRemoving, function() ModelRevision += 1 end)
+		if PreviewPlayer.CharacterAppearanceLoaded then
+			Library:Connection(PreviewPlayer.CharacterAppearanceLoaded, QueueCharacter)
+		end
+	end
 	task.defer(function()
-		if OriginalModel then return end;
-		local LP = game:GetService("Players").LocalPlayer;
-		local Char = LP and LP.Character;
-        if Library.Destroyed then return end
-		if Char and not OriginalModel then ViewModel(Char) end;
-	end);
+		if Library.Destroyed or OriginalModel or not PreviewPlayer then return end
+		if Opts.ExternalRenderer then QueueCharacter(PreviewPlayer.Character)
+		elseif PreviewPlayer.Character then ViewModel(PreviewPlayer.Character) end
+	end)
+
 
 	if Opts.Tooltip then Library:Tooltip(Container, Opts.Tooltip) end;
 	if Opts.Dependency and typeof(Opts.Dependency.OnChange) == "function" then
