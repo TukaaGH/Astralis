@@ -54,11 +54,13 @@ local function fetch(url)
 	return body
 end
 
+local runtimeEnvironment
 local function execute(url, ...)
 	local compiled, chunk = pcall(loadstring, fetch(url), "=Astralis/loader")
 	if not compiled or type(chunk) ~= "function" then
 		fail("the downloaded script could not be compiled.")
 	end
+	if runtimeEnvironment then setfenv(chunk, runtimeEnvironment) end
 	local ok, result = pcall(chunk, ...)
 	if not ok then
 		fail("initialization failed: " .. tostring(result))
@@ -102,7 +104,7 @@ if not selected then
 	fail("this game is not supported.")
 end
 if selected.enabled ~= true then
-	fail(selected.gameName .. " is temporarily unavailable.")
+	fail(selected.unavailableReason or (selected.gameName .. " is temporarily unavailable."))
 end
 
 local normalized = executor:lower():gsub("[%s%p]", "")
@@ -138,4 +140,5 @@ return execute(releaseRoot .. selected.gitPath .. "/main.lua", {
 	game = selected,
 	root = releaseRoot,
 	load = execute,
+	setEnvironment = function(environment) runtimeEnvironment = environment end,
 })

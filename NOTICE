@@ -1,5 +1,6 @@
-uiLibrary.lua is adapted from:
-https://github.com/mainstreamed/amongus-hook/blob/main/assets/uiLibrary.lua
+uiLibrary.lua and assets/uiLibrary.lua are adapted from Coincide UI:
+https://github.com/ExtroDevGit/Coincide-UI
+Upstream revision: 4d5a7710d20833e5a251c717689e58616eb5d5ec.
 
-The upstream repository did not provide a license at the time of publication.
+No upstream license was present in the inspected repository.
 The MIT grant in LICENSE does not relicense pre-existing upstream material.

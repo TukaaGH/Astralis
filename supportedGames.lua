@@ -6,8 +6,8 @@ return {
 			gameIDs = { 10769082317 },
 			placeIDs = { 79862723087324 },
 			gitPath = "fustsurvival",
-			version = "1.0.9",
-			releaseRef = "v1.0.9",
+			version = "1.1.0",
+			releaseRef = "v1.1.0",
 			enabled = true,
 			executors = {
 				"Potassium",
@@ -33,6 +33,14 @@ return {
 				opiumware = "Opiumware",
 				macsploit = "MacSploit",
 			},
+		},
+		{
+			gameName = "Ink Game",
+			gameIDs = { 7008097940 },
+			placeIDs = { 99567941238278 },
+			gitPath = "inkgame",
+			enabled = false,
+			unavailableReason = "Ink Game is not available yet.",
 		},
 	},
 }
