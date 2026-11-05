@@ -19,7 +19,7 @@ export type Source = {
     subscribe: ((add: (any) -> (), remove: (any) -> ()) -> any)?,
 }
 
-local ESP = { version = 5, adapters = {}, sources = {}, utils = {} }
+local ESP = { version = 6, adapters = {}, sources = {}, utils = {} }
 local Controller = {}
 Controller.__index = Controller
 local Handle = {}
@@ -376,7 +376,8 @@ function Context:reserveLabel(side, height, gap, lane, width)
         if typeof(anchor) ~= "Vector3" then
             anchor = self.state.position
         end
-        local projected = anchor and self.camera:WorldToViewportPoint(anchor)
+        local projected = self._highlightAnchor
+        if not projected and anchor then projected = self.camera:WorldToViewportPoint(anchor); self._highlightAnchor = projected end
         local centerX = projected and projected.Z > 0 and projected.X or top.X + size.X / 2
         local centerY = projected and projected.Z > 0 and projected.Y or top.Y + size.Y / 2
         if side == "left" or side == "right" then
@@ -395,15 +396,16 @@ end
 
 local function applyText(drawing, context, options, text, side)
     local fontSize = options.size or context.controller.textSize
-    drawing.Text = tostring(text)
-    drawing.Size = fontSize
-    drawing.Font = options.font or context.controller.font
-    drawing.Center = true
-    drawing.Outline = options.outline ~= false
-    drawing.OutlineColor = read(options.outlineColor, context, Color3.new(0, 0, 0))
-    drawing.Color = read(options.color, context, context.state.color or Color3.new(1, 1, 1))
-    drawing.Transparency = options.transparency or 1
-drawing.Position = context:reserveLabel(options.side or side, fontSize, options.gap, options.lane, drawing.TextBounds.X)
+    local function assign(key, value) if drawing[key] ~= value then drawing[key] = value end end
+    assign("Text", tostring(text))
+    assign("Size", fontSize)
+    assign("Font", options.font or context.controller.font)
+    assign("Center", true)
+    assign("Outline", options.outline ~= false)
+    assign("OutlineColor", read(options.outlineColor, context, Color3.new(0, 0, 0)))
+    assign("Color", read(options.color, context, context.state.color or Color3.new(1, 1, 1)))
+    assign("Transparency", options.transparency or 1)
+    drawing.Position = context:reserveLabel(options.side or side, fontSize, options.gap, options.lane or (context.featureName and context.featureName:sub(1, 9) == "highlight" and "highlight"), drawing.TextBounds.X)
         + (options.offset or Vector2.new())
     drawing.Visible = true
 end
@@ -545,14 +547,20 @@ local function highlightFeatures()
                     instance.Enabled = false
                     return
                 end
-                instance.Adornee = model
-                instance.DepthMode = options.depthMode or Enum.HighlightDepthMode.AlwaysOnTop
-                instance.FillColor = read(options.fillColor, context, context.state.color or Color3.fromRGB(125, 75, 210))
-                instance.OutlineColor = read(options.outlineColor, context, instance.FillColor)
-                instance.FillTransparency = math.clamp(options.fillTransparency or 0.65, 0, 1)
-                instance.OutlineTransparency = math.clamp(options.outlineTransparency or 0, 0, 1)
-                instance.Parent = context.controller.highlightParent or context.camera
-                instance.Enabled = true
+                local fillColor = read(options.fillColor, context, context.state.color or Color3.fromRGB(125, 75, 210))
+                local properties = objects.properties or {}
+                objects.properties = properties
+                local function assign(key, value)
+                    if properties[key] ~= value then instance[key] = value; properties[key] = value end
+                end
+                assign("Adornee", model)
+                assign("DepthMode", options.depthMode or Enum.HighlightDepthMode.AlwaysOnTop)
+                assign("FillColor", fillColor)
+                assign("OutlineColor", read(options.outlineColor, context, fillColor))
+                assign("FillTransparency", math.clamp(options.fillTransparency or 0.65, 0, 1))
+                assign("OutlineTransparency", math.clamp(options.outlineTransparency or 0, 0, 1))
+                assign("Parent", context.controller.highlightParent or context.camera)
+                if not instance.Enabled then instance.Enabled = true end
             end,
         },
         highlightName = label(31, function(context, options) return read(options.text, context, context.state.name) end, "above"),
@@ -655,6 +663,7 @@ function ESP.new(options)
         end,
         highlightParent = options.highlightParent,
         highlightLabelExtent = options.highlightLabelExtent or 48,
+        projectionMode = options.projectionMode,
         _instanceFactory = options.instanceFactory or function(kind) return Instance.new(kind) end,
         font = options.font or 1,
         textSize = options.textSize or 13,
@@ -862,6 +871,8 @@ function Handle:refresh()
     return self
 end
 function Handle:hide()
+    if self._hidden then return end
+    self._hidden = true
     for _, group in pairs(self._groups) do
         hideGroup(group)
     end
@@ -908,7 +919,15 @@ function Controller:_renderFeature(handle, name, context)
     if not definition then
         return
     end
-    local options = merge(self.features[name], handle.features[name])
+    local base, override = self.features[name], handle.features[name]
+    handle._optionCache = handle._optionCache or {}
+    local cached = handle._optionCache[name]
+    if not cached or cached.base ~= base or cached.override ~= override then
+        cached = {base = base, override = override, options = merge(base, override)}
+        handle._optionCache[name] = cached
+    end
+    local options = cached.options
+    context.featureName = name
     local group = handle._groups[name]
     local ok, problem = pcall(function()
         if not read(options.enabled, context, false) then
@@ -991,7 +1010,21 @@ function Controller:_stepHandle(handle, camera, delta)
         return
     end
     local geometries = state.bounds and { state.bounds } or state.parts or {}
-    local rect = ESP.utils.project(camera, geometries, self.nearPlane)
+local rect
+    if self.projectionMode == "anchor" and state.position then
+        local point, shown = camera:WorldToViewportPoint(state.labelPosition or state.position)
+        anchor = point
+        if shown and point.Z >= self.nearPlane then
+            local extent = math.min(self.highlightLabelExtent, 18)
+            local dimensions = state.bounds and state.bounds.size
+            local focal = self._frameFocal
+            if dimensions and focal then extent = math.clamp(math.max(dimensions.X, dimensions.Y) * focal / (2 * point.Z), 4, self.highlightLabelExtent) end
+            rect = {position = Vector2.new(point.X - extent, point.Y - extent), size = Vector2.new(extent * 2, extent * 2)}
+        end
+    else
+        geometries = state.bounds and {state.bounds} or state.parts or {}
+        rect = ESP.utils.project(camera, geometries, self.nearPlane)
+    end
     if not rect then
         return
     end
@@ -1019,9 +1052,11 @@ function Controller:_stepHandle(handle, camera, delta)
         camera = camera,
         rect = rect,
         distance = distance,
+        _highlightAnchor = anchor,
         _layout = { box = { above = 2, below = 2 }, highlight = { above = 2, below = 2, left = 0, right = 0 } },
     }, Context)
-    for _, name in ipairs(table.clone(self._ordered)) do
+    handle._hidden = false
+    for _, name in ipairs(self._frameOrder or table.clone(self._ordered)) do
         if handle._removed then
             break
         end
