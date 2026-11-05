@@ -19,7 +19,7 @@ export type Source = {
     subscribe: ((add: (any) -> (), remove: (any) -> ()) -> any)?,
 }
 
-local ESP = { version = 4, adapters = {}, sources = {}, utils = {} }
+local ESP = { version = 5, adapters = {}, sources = {}, utils = {} }
 local Controller = {}
 Controller.__index = Controller
 local Handle = {}
@@ -354,11 +354,39 @@ function Context:createDrawing(kind, properties)
     return drawing
 end
 
-function Context:reserveLabel(side, height, gap)
-    assert(side == "above" or side == "below", "label side must be above or below")
+function Context:createInstance(kind, properties)
+    assert(self._group, "createInstance is only available during feature.create")
+    local instance = self.controller._instanceFactory(kind)
+    table.insert(self._group.instances, instance)
+    for key, value in pairs(properties or {}) do
+        instance[key] = value
+    end
+    return instance
+end
+
+function Context:reserveLabel(side, height, gap, lane, width)
+    lane = lane or "box"
+    local layout = self._layout[lane]
+    assert(layout and layout[side] ~= nil, "invalid label lane or side")
     local top, size = self.rect.position, self.rect.size
-    local offset = self._layout[side]
-    self._layout[side] = offset + height + (gap or 2)
+    local offset = layout[side]
+    layout[side] = offset + height + (gap or 2)
+    if lane == "highlight" then
+        local anchor = self.state.labelPosition
+        if typeof(anchor) ~= "Vector3" then
+            anchor = self.state.position
+        end
+        local projected = anchor and self.camera:WorldToViewportPoint(anchor)
+        local centerX = projected and projected.Z > 0 and projected.X or top.X + size.X / 2
+        local centerY = projected and projected.Z > 0 and projected.Y or top.Y + size.Y / 2
+        if side == "left" or side == "right" then
+            local labelWidth = width or self.controller.textSize * 4
+            local extent = math.min(size.X / 2, self.controller.highlightLabelExtent)
+            return Vector2.new(centerX + (side == "left" and -1 or 1) * (extent + 8 + labelWidth / 2), centerY + offset)
+        end
+        local extent = math.min(size.Y / 2, self.controller.highlightLabelExtent)
+        return Vector2.new(centerX, centerY + (side == "above" and -extent - offset - height or extent + offset))
+    end
     if side == "above" then
         return Vector2.new(top.X + size.X / 2, top.Y - offset - height)
     end
@@ -375,7 +403,7 @@ local function applyText(drawing, context, options, text, side)
     drawing.OutlineColor = read(options.outlineColor, context, Color3.new(0, 0, 0))
     drawing.Color = read(options.color, context, context.state.color or Color3.new(1, 1, 1))
     drawing.Transparency = options.transparency or 1
-    drawing.Position = context:reserveLabel(options.side or side, fontSize, options.gap)
+drawing.Position = context:reserveLabel(options.side or side, fontSize, options.gap, options.lane, drawing.TextBounds.X)
         + (options.offset or Vector2.new())
     drawing.Visible = true
 end
@@ -493,7 +521,73 @@ local function builtins()
     }
 end
 
+local function highlightFeatures()
+    local function label(order, resolver, side)
+        local feature = textFeature(order, resolver, side)
+        local render = feature.render
+        feature.render = function(context, drawings, options)
+            options = merge(options, { lane = "highlight" })
+            render(context, drawings, options)
+        end
+        return feature
+    end
+    return {
+        highlight = {
+            order = 5,
+            managesVisibility = true,
+            create = function(context)
+                return { instance = context:createInstance("Highlight", { Enabled = false, Name = "AstralisHighlight" }) }
+            end,
+            render = function(context, objects, options)
+                local model = read(options.adornee, context, context.state.model)
+                local instance = objects.instance
+                if typeof(model) ~= "Instance" or not model.Parent then
+                    instance.Enabled = false
+                    return
+                end
+                instance.Adornee = model
+                instance.DepthMode = options.depthMode or Enum.HighlightDepthMode.AlwaysOnTop
+                instance.FillColor = read(options.fillColor, context, context.state.color or Color3.fromRGB(125, 75, 210))
+                instance.OutlineColor = read(options.outlineColor, context, instance.FillColor)
+                instance.FillTransparency = math.clamp(options.fillTransparency or 0.65, 0, 1)
+                instance.OutlineTransparency = math.clamp(options.outlineTransparency or 0, 0, 1)
+                instance.Parent = context.controller.highlightParent or context.camera
+                instance.Enabled = true
+            end,
+        },
+        highlightName = label(31, function(context, options) return read(options.text, context, context.state.name) end, "above"),
+        highlightHealth = label(41, function(context, options)
+            local health, maximum = context.state.health, context.state.maxHealth
+            if options.value then health, maximum = options.value(context) end
+            if not finite(health) or not finite(maximum) or maximum <= 0 then return nil end
+            return options.format and options.format(health, maximum, context) or string.format("%d / %d", math.round(health), math.round(maximum))
+        end, "below"),
+        highlightWeapon = label(42, function(context, options)
+            local value = read(options.text, context, context.state.weapon)
+            if typeof(value) == "Instance" then value = value.Name end
+            return value
+        end, "right"),
+        highlightDistance = label(51, function(context, options)
+            local distance = read(options.value, context, context.distance)
+            if not finite(distance) then return nil end
+            return options.format and options.format(distance, context) or string.format("[%d]", math.round(distance))
+        end, "below"),
+        highlightFlags = label(61, function(context, options)
+            local flags = read(options.values, context, context.state.flags)
+            if type(flags) ~= "table" then return nil end
+            local result = {}
+            for _, flag in ipairs(flags) do
+                local text = type(flag) == "table" and flag.text or flag
+                local enabled = type(flag) ~= "table" or read(flag.enabled, context, true)
+                if enabled and text ~= nil and text ~= "" then table.insert(result, tostring(text)) end
+            end
+            return #result > 0 and table.concat(result, "\n") or nil
+        end, "right"),
+    }
+end
+
 local function hideGroup(group)
+    for _, instance in ipairs(group.instances or {}) do pcall(function() instance.Enabled = false end) end
     for _, drawing in ipairs(group.all) do
         pcall(function()
             drawing.Visible = false
@@ -502,6 +596,8 @@ local function hideGroup(group)
 end
 
 local function destroyGroup(group)
+    for _, instance in ipairs(group.instances or {}) do pcall(function() instance:Destroy() end) end
+    table.clear(group.instances or {})
     for _, drawing in ipairs(group.all) do
         pcall(function()
             drawing.Visible = false
@@ -557,6 +653,9 @@ function ESP.new(options)
         _drawingFactory = options.drawingFactory or function(kind)
             return Drawing.new(kind)
         end,
+        highlightParent = options.highlightParent,
+        highlightLabelExtent = options.highlightLabelExtent or 48,
+        _instanceFactory = options.instanceFactory or function(kind) return Instance.new(kind) end,
         font = options.font or 1,
         textSize = options.textSize or 13,
     }, Controller)
@@ -567,6 +666,7 @@ function ESP.new(options)
     for name, definition in pairs(builtins()) do
         self:registerFeature(name, definition)
     end
+    for name, definition in pairs(highlightFeatures()) do self:registerFeature(name, definition) end
     for name, settings in pairs(DEFAULT_FEATURES) do
         self.features[name] = table.clone(settings)
     end
@@ -821,7 +921,7 @@ function Controller:_renderFeature(handle, name, context)
             return
         end
         if not group then
-            group = { all = {} }
+            group = { all = {}, instances = {} }
             handle._groups[name] = group
             context._group = group
             local created, drawings = pcall(definition.create, context)
@@ -919,7 +1019,7 @@ function Controller:_stepHandle(handle, camera, delta)
         camera = camera,
         rect = rect,
         distance = distance,
-        _layout = { above = 2, below = 2 },
+        _layout = { box = { above = 2, below = 2 }, highlight = { above = 2, below = 2, left = 0, right = 0 } },
     }, Context)
     for _, name in ipairs(table.clone(self._ordered)) do
         if handle._removed then
