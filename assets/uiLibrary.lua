@@ -3967,6 +3967,8 @@ end;
 			if not KeyMatches(Input) then return end;
             if Opts.InputGate and not Opts.InputGate() then return end
 			if Mode == "always" then
+				State = true;
+				Library.Flags[Flag] = State;
 				Callback(true);
 			elseif Mode == "hold" then
 				State = true;
@@ -3977,6 +3979,7 @@ end;
 				Library.Flags[Flag] = State;
 				Callback(State);
 			end;
+			Library:NotifyKeybind();
 		end);
 
 		Library:Connection(UserInputService.InputEnded, function(Input)
@@ -3986,6 +3989,7 @@ end;
 				State = false;
 				Library.Flags[Flag] = State;
 				Callback(false);
+				Library:NotifyKeybind();
 			end;
 		end);
 
@@ -4011,6 +4015,7 @@ end;
             State = false; Library.Flags[Flag] = false
             RefreshModeBtns()
             if Opts.OnModeChanged then Opts.OnModeChanged(Mode) end
+            Library:NotifyKeybind()
         end
 		function Obj:SetActive(value) State = value == true; Library.Flags[Flag] = State; Library:NotifyKeybind() end
         function Obj:SetKey(K)
@@ -4018,6 +4023,7 @@ end;
 			Key = K; State = false; Library.Flags[Flag] = false;
 			Refresh();
             if Opts.OnKeyChanged then Opts.OnKeyChanged(Key) end
+            Library:NotifyKeybind()
 		end;
 		Library.Options[Flag] = {
 			Save = function()
@@ -4797,6 +4803,7 @@ RegisterGradLerp(GradEntry)
 		State = State and true or false;
 		if self.Visible == State then return end;
 		self.Visible = State;
+		Library:NotifyKeybind();
 		self._FadeToken = self._FadeToken + 1;
 		local Mine = self._FadeToken;
 		-- If a hide interrupts a still-running fade-in, snap to the captured originals first so
@@ -4972,6 +4979,8 @@ function Library:KeybindList(Opts)
 	end;
 
 	local Rows = {};
+	local EnabledText = Color3.fromHex("62E38F");
+	local InactiveText = Color3.fromHex("BFC4CC");
 	local function Rebuild()
 		if Library.Destroyed or not Gui.Parent then return end
 		local Present = {}
@@ -5015,7 +5024,6 @@ function Library:KeybindList(Opts)
 						TextXAlignment         = Enum.TextXAlignment.Right;
 						TextYAlignment         = Enum.TextYAlignment.Center;
 					});
-					Library:RegisterAccent(KeyLbl, "TextColor3");
 					if ProggyCleanFont then
 						NameLbl.FontFace = ProggyCleanFont;
 						KeyLbl.FontFace  = ProggyCleanFont;
@@ -5027,6 +5035,10 @@ function Library:KeybindList(Opts)
 				Ref.frame.LayoutOrder = I
 				Ref.name.Text = tostring(Entry.Name or "?")
 				Ref.key.Text = KeyName(Key)
+				local Ok, Active = pcall(Entry.GetState or function() return false end)
+				local Enabled = Ok and Active == true
+				Ref.name.TextColor3 = Enabled and EnabledText or InactiveText
+				Ref.key.TextColor3 = Enabled and EnabledText or Library.Accent
 			end;
 		end;
         for Entry, Ref in pairs(Rows) do
@@ -5034,6 +5046,7 @@ function Library:KeybindList(Opts)
         end
 	end;
 	Library:OnKeybindChange(Rebuild);
+	Library:OnAccent(Rebuild);
 
 	local Obj = { Gui = Gui, Frame = Frame, TitleLabel = TitleLbl };
 	function Obj:Refresh() Rebuild() end;
@@ -5179,8 +5192,7 @@ function Library:Notify(Text, Time, Color)
     Time = tonumber(Time)
     if not Time or Time ~= Time or math.abs(Time) == math.huge then Time = 4 end
     Time = math.clamp(Time, 0.5, 120)
-    local UseAccent = typeof(Color) ~= "Color3"
-    Color = UseAccent and self.Accent or Color
+    local BorderColor = typeof(Color) == "Color3" and Color or Color3.fromHex("393939")
 
     if not self._NotifyGui or not self._NotifyGui.Parent or not self._NotifyStack or not self._NotifyStack.Parent then
         if self._NotifyGui then self._NotifyGui:Destroy() end
@@ -5198,165 +5210,135 @@ function Library:Notify(Text, Time, Color)
         local Stack = self:CreateInstance("Frame", {
             Name = "Stack";
             Parent = Gui;
-            Position = UDim2.new(0, 16, 0.18, 0);
-            Size = UDim2.new(1, -32, 0.82, -16);
+            Position = UDim2.fromOffset(10, 200);
+            Size = UDim2.new(1, -20, 1, -210);
             BackgroundTransparency = 1;
             BorderSizePixel = 0;
-            ClipsDescendants = true;
+            ClipsDescendants = false;
         })
-        self:CreateInstance("UISizeConstraint", {
-            Parent = Stack;
-            MaxSize = Vector2.new(344, 1000000);
-        })
-        self:CreateInstance("UIPadding", {
-            Parent = Stack;
-            PaddingTop = UDim.new(0, 2);
-            PaddingLeft = UDim.new(0, 2);
-            PaddingRight = UDim.new(0, 2);
-        })
+        self:CreateInstance("UISizeConstraint", {Parent = Stack; MaxSize = Vector2.new(340, 1000000)})
         self:CreateInstance("UIListLayout", {
             Parent = Stack;
             FillDirection = Enum.FillDirection.Vertical;
             SortOrder = Enum.SortOrder.LayoutOrder;
             VerticalAlignment = Enum.VerticalAlignment.Top;
             HorizontalAlignment = Enum.HorizontalAlignment.Left;
-            Padding = UDim.new(0, 8);
+            Padding = UDim.new(0, 6);
         })
         self._NotifyGui, self._NotifyStack, self._NotifyOrder = Gui, Stack, 0
         self._NotifyEntries = {}
-        local GuiConnection
+        local SizeConnection, GuiConnection
+        SizeConnection = Stack:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+            for _, Entry in self._NotifyEntries do Entry.Resize() end
+        end)
         GuiConnection = Gui.Destroying:Connect(function()
-            if self._NotifyGui == Gui then
-                self._NotifyGui, self._NotifyStack = nil, nil
-            end
+            if self._NotifyGui == Gui then self._NotifyGui, self._NotifyStack = nil, nil end
+            SizeConnection:Disconnect()
             GuiConnection:Disconnect()
         end)
-        if not self._NotifyAccentBound then
-            self._NotifyAccentBound = true
-            self:OnAccent(function(Accent)
-                for _, Entry in self._NotifyEntries or {} do
-                    if Entry.UseAccent and Entry.Wrapper.Parent then
-                        Entry.Liner.BackgroundColor3 = Accent
-                        Entry.Progress.BackgroundColor3 = Accent
-                        Entry.Outline.Color = Accent
-                    end
-                end
-            end)
-        end
     end
     self._NotifyOrder += 1
-
+    local function WidthLimit()
+        local Width = self._NotifyStack.AbsoluteSize.X
+        if Width <= 0 then
+            local Camera = Workspace.CurrentCamera
+            Width = Camera and Camera.ViewportSize.X - 20 or 340
+        end
+        return math.max(32, math.min(340, Width))
+    end
+    local Limit = WidthLimit()
+    local PlainText = Text:gsub("<[^>]*>", "")
+    local Width = math.clamp(#PlainText * 7 + 16, 32, Limit)
     local Wrapper = self:CreateInstance("Frame", {
         Name = "NotifWrapper";
         Parent = self._NotifyStack;
-        Size = UDim2.new(1, 0, 0, 0);
-        AutomaticSize = Enum.AutomaticSize.Y;
+        Size = UDim2.fromOffset(Width, 32);
         BackgroundTransparency = 1;
         BorderSizePixel = 0;
-        LayoutOrder = -self._NotifyOrder;
+        LayoutOrder = self._NotifyOrder;
         ClipsDescendants = false;
     })
     local Outer = self:CreateInstance("CanvasGroup", {
         Name = "Notification";
         Parent = Wrapper;
-        Position = UDim2.fromOffset(-28, 0);
-        Size = UDim2.new(1, 0, 0, 0);
-        AutomaticSize = Enum.AutomaticSize.Y;
-        BackgroundColor3 = Color3.fromHex("FFFFFF");
+        Position = UDim2.fromOffset(-60, 0);
+        Size = UDim2.fromScale(1, 1);
+        BackgroundColor3 = Color3.fromHex("000000");
         BorderSizePixel = 0;
         GroupTransparency = 1;
     })
-    self:CreateInstance("UISizeConstraint", {
+    local Inline = self:CreateInstance("Frame", {
+        Name = "Inline";
         Parent = Outer;
-        MinSize = Vector2.new(0, 44);
-    })
-    self:CreateInstance("UICorner", {Parent = Outer; CornerRadius = UDim.new(0, 4)})
-    self:CreateInstance("UIGradient", {
-        Parent = Outer;
-        Rotation = 90;
-        Color = NewColorSequence({
-            NewColorSequenceKeypoint(0, Color3.fromHex("292D36"));
-            NewColorSequenceKeypoint(1, Color3.fromHex("1A1D24"));
-        });
-    })
-    local Outline = self:CreateInstance("UIStroke", {
-        Parent = Outer;
-        Color = Color;
-        Transparency = 0.45;
-        Thickness = 1;
-        ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
-    })
-    local Content = self:CreateInstance("Frame", {
-        Name = "Content";
-        Parent = Outer;
-        Size = UDim2.new(1, 0, 0, 0);
-        AutomaticSize = Enum.AutomaticSize.Y;
-        BackgroundTransparency = 1;
+        Position = UDim2.fromOffset(1, 1);
+        Size = UDim2.new(1, -2, 1, -2);
+        BackgroundColor3 = BorderColor;
         BorderSizePixel = 0;
     })
-    self:CreateInstance("UIPadding", {
-        Parent = Content;
-        PaddingTop = UDim.new(0, 10);
-        PaddingBottom = UDim.new(0, 13);
-        PaddingLeft = UDim.new(0, 15);
-        PaddingRight = UDim.new(0, 13);
+    local Background = self:CreateInstance("Frame", {
+        Name = "Background";
+        Parent = Inline;
+        Position = UDim2.fromOffset(1, 1);
+        Size = UDim2.new(1, -2, 1, -2);
+        BackgroundColor3 = Color3.fromHex("FFFFFF");
+        BorderSizePixel = 0;
     })
-    self:CreateInstance("TextLabel", {
+    self:CreateInstance("UIGradient", {
+        Parent = Background;
+        Rotation = 90;
+        Color = NewColorSequence({
+            NewColorSequenceKeypoint(0, Color3.fromHex("262626"));
+            NewColorSequenceKeypoint(1, Color3.fromHex("191919"));
+        });
+    })
+    local Title = self:CreateInstance("TextLabel", {
         Name = "Title";
-        Parent = Content;
-        Size = UDim2.new(1, 0, 0, 0);
+        Parent = Background;
+        Position = UDim2.fromOffset(6, 5);
+        Size = UDim2.fromOffset(math.max(16, Limit - 16), 18);
         AutomaticSize = Enum.AutomaticSize.Y;
         BackgroundTransparency = 1;
         BorderSizePixel = 0;
         Text = Text;
-        TextColor3 = Color3.fromHex("F3F4F8");
-        TextSize = 14;
-        FontFace = self.UIFont;
+        TextColor3 = Color3.fromHex("BFC4CC");
+        TextTransparency = 0;
+        TextSize = 13;
+        Font = Enum.Font.Code;
         TextXAlignment = Enum.TextXAlignment.Left;
         TextYAlignment = Enum.TextYAlignment.Top;
         TextWrapped = true;
         RichText = true;
-    })
-    local Liner = self:CreateInstance("Frame", {
-        Name = "Liner";
-        Parent = Outer;
-        Position = UDim2.fromOffset(0, 4);
-        Size = UDim2.new(0, 4, 1, -8);
-        BackgroundColor3 = Color;
-        BorderSizePixel = 0;
         ZIndex = 2;
     })
-    self:CreateInstance("UICorner", {Parent = Liner; CornerRadius = UDim.new(0, 2)})
-    local Track = self:CreateInstance("Frame", {
-        Name = "DurationTrack";
-        Parent = Outer;
-        AnchorPoint = Vector2.new(0, 1);
-        Position = UDim2.new(0, 4, 1, 0);
-        Size = UDim2.new(1, -8, 0, 3);
-        BackgroundColor3 = Color3.fromHex("FFFFFF");
-        BackgroundTransparency = 0.9;
-        BorderSizePixel = 0;
-        ClipsDescendants = true;
-        ZIndex = 2;
+    if ProggyCleanFont then Title.FontFace = ProggyCleanFont end
+    self:CreateInstance("UIStroke", {
+        Parent = Title;
+        Color = Color3.fromHex("000000");
+        Thickness = 1;
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual;
+        LineJoinMode = Enum.LineJoinMode.Miter;
     })
-    local DurationLiner = self:CreateInstance("Frame", {
-        Name = "DurationLiner";
-        Parent = Track;
-        Size = UDim2.fromScale(1, 1);
-        BackgroundColor3 = Color;
-        BorderSizePixel = 0;
-        ZIndex = 3;
-    })
-    self._NotifyEntries[Wrapper] = {Wrapper = Wrapper, UseAccent = UseAccent,
-        Liner = Liner, Progress = DurationLiner, Outline = Outline}
+    local Finished = false
+    local function Resize()
+        if Finished or not Wrapper.Parent then return end
+        local Available = WidthLimit()
+        local Bounds = Title.TextBounds
+        local TextHeight = math.max(18, math.ceil(Bounds.Y), math.ceil(Title.AbsoluteSize.Y))
+        Title.Size = UDim2.fromOffset(math.max(16, Available - 16), 18)
+        local CardWidth = Bounds.X > 0 and math.ceil(Bounds.X) + 16 or Width
+        Wrapper.Size = UDim2.fromOffset(math.clamp(CardWidth, 32, Available), TextHeight + 14)
+    end
+    self._NotifyEntries[Wrapper] = {Resize = Resize}
+    local TextConnection = Title:GetPropertyChangedSignal("TextBounds"):Connect(Resize)
+    local LayoutConnection = Title:GetPropertyChangedSignal("AbsoluteSize"):Connect(Resize)
+    Resize()
 
     local InInfo = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
     local OutInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-    local Finished = false
     local EntryTimer, DismissTimer, ExitTimer, DestroyConnection
     local Tweens = {}
-    local function Play(Instance, Info, Properties)
-        local Tween = TweenService:Create(Instance, Info, Properties)
+    local function Play(Object, Info, Properties)
+        local Tween = TweenService:Create(Object, Info, Properties)
         Tweens[#Tweens + 1] = Tween
         Tween:Play()
     end
@@ -5364,6 +5346,8 @@ function Library:Notify(Text, Time, Color)
         if Finished then return end
         Finished = true
         self._NotifyEntries[Wrapper] = nil
+        TextConnection:Disconnect()
+        LayoutConnection:Disconnect()
         for _, Timer in {EntryTimer, DismissTimer, ExitTimer} do
             if Timer then pcall(task.cancel, Timer) end
         end
@@ -5374,11 +5358,10 @@ function Library:Notify(Text, Time, Color)
     EntryTimer = task.delay(InInfo.Time, function()
         EntryTimer = nil
         if Finished or not Wrapper.Parent then return end
-        Play(DurationLiner, TweenInfo.new(Time, Enum.EasingStyle.Linear), {Size = UDim2.fromScale(0, 1)})
         DismissTimer = task.delay(Time, function()
             DismissTimer = nil
             if Finished or not Wrapper.Parent then return end
-            Play(Outer, OutInfo, {Position = UDim2.fromOffset(-28, 0), GroupTransparency = 1})
+            Play(Outer, OutInfo, {Position = UDim2.fromOffset(-60, 0), GroupTransparency = 1})
             ExitTimer = task.delay(OutInfo.Time, function()
                 ExitTimer = nil
                 if not Finished then Wrapper:Destroy() end
