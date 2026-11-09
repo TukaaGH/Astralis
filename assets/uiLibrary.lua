@@ -5174,188 +5174,218 @@ local Logo = self:CreateInstance("ImageLabel", {
 end;
 
 function Library:Notify(Text, Time, Color)
-    Text = tostring(Text or "");
-    Time = tonumber(Time) or 3;
-    Color = Color or Library.Accent or Color3.fromHex("FFFFFF");
+    if self.Destroyed then return end
+    Text = tostring(Text or "")
+    Time = tonumber(Time)
+    if not Time or Time ~= Time or math.abs(Time) == math.huge then Time = 4 end
+    Time = math.clamp(Time, 0.5, 120)
+    local UseAccent = typeof(Color) ~= "Color3"
+    Color = UseAccent and self.Accent or Color
 
-    -- Notification Stack'i oluştur (eğer yoksa)
-    if not self._NotifyStack then
-        local Gui = self:CreateInstance("ScreenGui", {
-            Name           = "Notifications";
-            Parent         = (gethui and gethui()) or CoreGui;
-            IgnoreGuiInset = true;
-            ResetOnSpawn   = false;
-            ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
-        });
-        local Stack = self:CreateInstance("Frame", {
-            Name                   = "Stack";
-            Parent                 = Gui;
-            AnchorPoint            = Vector2.new(0, 0);
-            Position               = UDim2.new(0, 10, 0, 200);
-            Size                   = UDim2.new(0, 200, 1, -210);
-            BackgroundTransparency = 1;
-            BorderSizePixel        = 0;
-        });
-        self:CreateInstance("UIListLayout", {
-            Parent              = Stack;
-            FillDirection       = Enum.FillDirection.Vertical;
-            SortOrder           = Enum.SortOrder.LayoutOrder;
-            VerticalAlignment   = Enum.VerticalAlignment.Top;
-            HorizontalAlignment = Enum.HorizontalAlignment.Left;
-            Padding             = UDim.new(0, 6);
-        });
-        self._NotifyGui   = Gui;
-        self._NotifyStack = Stack;
-        self._NotifyOrder = 0;
-    end;
-
-    self._NotifyOrder = self._NotifyOrder + 1;
-
-    -- Notification Wrapper (ana taşıyıcı)
-    local Wrapper = self:CreateInstance("Frame", {
-        Name                   = "NotifWrapper";
-        Parent                 = self._NotifyStack;
-        Size                   = UDim2.new(0, 0, 0, 0);
-        AutomaticSize          = Enum.AutomaticSize.XY;
-        BackgroundTransparency = 1;
-        BorderSizePixel        = 0;
-        LayoutOrder            = self._NotifyOrder;
-        ClipsDescendants       = false;
-    });
-
-    -- Ana CanvasGroup (giriş/çıkış animasyonları için)
-    local Outer = self:CreateInstance("CanvasGroup", {
-        Name              = "Notification";
-        Parent            = Wrapper;
-        AnchorPoint       = Vector2.new(0, 0);
-        Position          = UDim2.new(0, -60, 0, 0); -- Soldan kayarak gelme
-        Size              = UDim2.new(0, 0, 0, 0);
-        AutomaticSize     = Enum.AutomaticSize.XY;
-        BackgroundColor3  = Color3.fromHex("000000");
-        BorderSizePixel   = 0;
-        GroupTransparency = 1;
-    });
-    self:CreateInstance("UIPadding", {
-        Parent        = Outer;
-        PaddingBottom = UDim.new(0, 2);
-    });
-
-    -- Inline (kenar boşlukları)
-    local Inline = self:CreateInstance("Frame", {
-        Name             = "Inline";
-        Parent           = Outer;
-        Position         = UDim2.new(0, 1, 0, 1);
-        Size             = UDim2.new(1, -2, 1, 0);
-        BackgroundColor3 = Color3.fromHex("393939");
-        BorderSizePixel  = 0;
-    });
-    self:CreateInstance("UIPadding", {
-        Parent        = Inline;
-        PaddingBottom = UDim.new(0, 2);
-    });
-
-    -- Background (gradient arka plan)
-    local Background = self:CreateInstance("Frame", {
-        Name             = "Background";
-        Parent           = Inline;
-        Position         = UDim2.new(0, 1, 0, 1);
-        Size             = UDim2.new(1, -2, 1, 0);
-        BackgroundColor3 = Color3.fromHex("FFFFFF");
-        BorderSizePixel  = 0;
-    });
-    self:CreateInstance("UIGradient", {
-        Parent   = Background;
-        Rotation = 90;
-        Color    = NewColorSequence({
-            NewColorSequenceKeypoint(0, Color3.fromHex("262626"));
-            NewColorSequenceKeypoint(1, Color3.fromHex("191919"));
-        });
-    });
-
-
-    local Title = self:CreateInstance("TextLabel", {
-        Name                   = "Title";
-        Parent                 = Background;
-        Position               = UDim2.new(0, 4, 0, 4);
-        Size                   = UDim2.new(0, 0, 0, 0);
-        AutomaticSize          = Enum.AutomaticSize.XY;
-        BackgroundTransparency = 1;
-        BorderSizePixel        = 0;
-        Text                   = Text;
-        TextColor3             = Color3.fromHex("A0A0A0");
-        TextSize               = 12;
-        TextXAlignment         = Enum.TextXAlignment.Left;
-        TextYAlignment         = Enum.TextYAlignment.Top;
-        RichText               = true;
-    });
-    if ProggyCleanFont then Title.FontFace = ProggyCleanFont end;
-    self:CreateInstance("UIStroke", {
-        Parent          = Title;
-        Color           = Color3.fromHex("000000");
-        Thickness       = 1;
-        ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual;
-        LineJoinMode    = Enum.LineJoinMode.Miter;
-    });
-    self:CreateInstance("UIPadding", {
-        Parent        = Title;
-        PaddingRight  = UDim.new(0, 7);
-        PaddingBottom = UDim.new(0, 3);
-    });
-
-
-    local Liner = self:CreateInstance("Frame", {
-        Name             = "Liner";
-        Parent           = Outer;
-        Position         = UDim2.new(0, 2, 0, 2);
-        Size             = UDim2.new(0, 2, 1, -4);
-        BackgroundColor3 = Color;
-        BorderSizePixel  = 0;
-        ZIndex           = 2;
-    });
-
-
-    local DurationLiner = self:CreateInstance("Frame", {
-        Name             = "DurationLiner";
-        Parent           = Outer;
-        Position         = UDim2.new(0, 2, 1, -1);
-        Size             = UDim2.new(1, -4, 0, 1); -- Başlangıçta tam genişlikte
-        BackgroundColor3 = Color;
-        BorderSizePixel  = 0;
-        ZIndex           = 3;
-    });
-
-
-    local InInfo = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
-    local OutInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In);
-
-    TweenService:Create(Outer, InInfo, {
-        Position          = UDim2.new(0, 0, 0, 0);
-        GroupTransparency = 0;
-    }):Play();
-
-    task.spawn(function()
-        task.wait(0.1); -- Biraz bekle, notification tam yerleşsin
-        local TargetWidth = Outer.AbsoluteSize.X - 4;
-        if TargetWidth > 0 then
-            TweenService:Create(DurationLiner, TweenInfo.new(Time, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {
-                Size = UDim2.new(0, 0, 0, 1); -- Sona doğru sıfırlanır
-            }):Play();
+    if not self._NotifyGui or not self._NotifyGui.Parent or not self._NotifyStack or not self._NotifyStack.Parent then
+        if self._NotifyGui then self._NotifyGui:Destroy() end
+        for Index = #(self.OwnedGuis or {}), 1, -1 do
+            if not self.OwnedGuis[Index].Parent then table.remove(self.OwnedGuis, Index) end
         end
-    end);
+        local Gui = self:CreateInstance("ScreenGui", {
+            Name = "Notifications";
+            Parent = (gethui and gethui()) or CoreGui;
+            IgnoreGuiInset = true;
+            ResetOnSpawn = false;
+            DisplayOrder = 1000;
+            ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
+        })
+        local Stack = self:CreateInstance("Frame", {
+            Name = "Stack";
+            Parent = Gui;
+            Position = UDim2.new(0, 16, 0.18, 0);
+            Size = UDim2.new(1, -32, 0.82, -16);
+            BackgroundTransparency = 1;
+            BorderSizePixel = 0;
+            ClipsDescendants = true;
+        })
+        self:CreateInstance("UISizeConstraint", {
+            Parent = Stack;
+            MaxSize = Vector2.new(344, 1000000);
+        })
+        self:CreateInstance("UIPadding", {
+            Parent = Stack;
+            PaddingTop = UDim.new(0, 2);
+            PaddingLeft = UDim.new(0, 2);
+            PaddingRight = UDim.new(0, 2);
+        })
+        self:CreateInstance("UIListLayout", {
+            Parent = Stack;
+            FillDirection = Enum.FillDirection.Vertical;
+            SortOrder = Enum.SortOrder.LayoutOrder;
+            VerticalAlignment = Enum.VerticalAlignment.Top;
+            HorizontalAlignment = Enum.HorizontalAlignment.Left;
+            Padding = UDim.new(0, 8);
+        })
+        self._NotifyGui, self._NotifyStack, self._NotifyOrder = Gui, Stack, 0
+        self._NotifyEntries = {}
+        local GuiConnection
+        GuiConnection = Gui.Destroying:Connect(function()
+            if self._NotifyGui == Gui then
+                self._NotifyGui, self._NotifyStack = nil, nil
+            end
+            GuiConnection:Disconnect()
+        end)
+        if not self._NotifyAccentBound then
+            self._NotifyAccentBound = true
+            self:OnAccent(function(Accent)
+                for _, Entry in self._NotifyEntries or {} do
+                    if Entry.UseAccent and Entry.Wrapper.Parent then
+                        Entry.Liner.BackgroundColor3 = Accent
+                        Entry.Progress.BackgroundColor3 = Accent
+                        Entry.Outline.Color = Accent
+                    end
+                end
+            end)
+        end
+    end
+    self._NotifyOrder += 1
 
+    local Wrapper = self:CreateInstance("Frame", {
+        Name = "NotifWrapper";
+        Parent = self._NotifyStack;
+        Size = UDim2.new(1, 0, 0, 0);
+        AutomaticSize = Enum.AutomaticSize.Y;
+        BackgroundTransparency = 1;
+        BorderSizePixel = 0;
+        LayoutOrder = -self._NotifyOrder;
+        ClipsDescendants = false;
+    })
+    local Outer = self:CreateInstance("CanvasGroup", {
+        Name = "Notification";
+        Parent = Wrapper;
+        Position = UDim2.fromOffset(-28, 0);
+        Size = UDim2.new(1, 0, 0, 0);
+        AutomaticSize = Enum.AutomaticSize.Y;
+        BackgroundColor3 = Color3.fromHex("FFFFFF");
+        BorderSizePixel = 0;
+        GroupTransparency = 1;
+    })
+    self:CreateInstance("UISizeConstraint", {
+        Parent = Outer;
+        MinSize = Vector2.new(0, 44);
+    })
+    self:CreateInstance("UICorner", {Parent = Outer; CornerRadius = UDim.new(0, 4)})
+    self:CreateInstance("UIGradient", {
+        Parent = Outer;
+        Rotation = 90;
+        Color = NewColorSequence({
+            NewColorSequenceKeypoint(0, Color3.fromHex("292D36"));
+            NewColorSequenceKeypoint(1, Color3.fromHex("1A1D24"));
+        });
+    })
+    local Outline = self:CreateInstance("UIStroke", {
+        Parent = Outer;
+        Color = Color;
+        Transparency = 0.45;
+        Thickness = 1;
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+    })
+    local Content = self:CreateInstance("Frame", {
+        Name = "Content";
+        Parent = Outer;
+        Size = UDim2.new(1, 0, 0, 0);
+        AutomaticSize = Enum.AutomaticSize.Y;
+        BackgroundTransparency = 1;
+        BorderSizePixel = 0;
+    })
+    self:CreateInstance("UIPadding", {
+        Parent = Content;
+        PaddingTop = UDim.new(0, 10);
+        PaddingBottom = UDim.new(0, 13);
+        PaddingLeft = UDim.new(0, 15);
+        PaddingRight = UDim.new(0, 13);
+    })
+    self:CreateInstance("TextLabel", {
+        Name = "Title";
+        Parent = Content;
+        Size = UDim2.new(1, 0, 0, 0);
+        AutomaticSize = Enum.AutomaticSize.Y;
+        BackgroundTransparency = 1;
+        BorderSizePixel = 0;
+        Text = Text;
+        TextColor3 = Color3.fromHex("F3F4F8");
+        TextSize = 14;
+        FontFace = self.UIFont;
+        TextXAlignment = Enum.TextXAlignment.Left;
+        TextYAlignment = Enum.TextYAlignment.Top;
+        TextWrapped = true;
+        RichText = true;
+    })
+    local Liner = self:CreateInstance("Frame", {
+        Name = "Liner";
+        Parent = Outer;
+        Position = UDim2.fromOffset(0, 4);
+        Size = UDim2.new(0, 4, 1, -8);
+        BackgroundColor3 = Color;
+        BorderSizePixel = 0;
+        ZIndex = 2;
+    })
+    self:CreateInstance("UICorner", {Parent = Liner; CornerRadius = UDim.new(0, 2)})
+    local Track = self:CreateInstance("Frame", {
+        Name = "DurationTrack";
+        Parent = Outer;
+        AnchorPoint = Vector2.new(0, 1);
+        Position = UDim2.new(0, 4, 1, 0);
+        Size = UDim2.new(1, -8, 0, 3);
+        BackgroundColor3 = Color3.fromHex("FFFFFF");
+        BackgroundTransparency = 0.9;
+        BorderSizePixel = 0;
+        ClipsDescendants = true;
+        ZIndex = 2;
+    })
+    local DurationLiner = self:CreateInstance("Frame", {
+        Name = "DurationLiner";
+        Parent = Track;
+        Size = UDim2.fromScale(1, 1);
+        BackgroundColor3 = Color;
+        BorderSizePixel = 0;
+        ZIndex = 3;
+    })
+    self._NotifyEntries[Wrapper] = {Wrapper = Wrapper, UseAccent = UseAccent,
+        Liner = Liner, Progress = DurationLiner, Outline = Outline}
 
-    task.delay(Time, function()
-        if not Wrapper.Parent then return end;
-        TweenService:Create(Outer, OutInfo, {
-            Position          = UDim2.new(0, -60, 0, 0);
-            GroupTransparency = 1;
-        }):Play();
-        task.delay(OutInfo.Time, function()
-            if Wrapper and Wrapper.Parent then Wrapper:Destroy() end;
-        end);
-    end);
-
-    return Wrapper;
+    local InInfo = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local OutInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+    local Finished = false
+    local EntryTimer, DismissTimer, ExitTimer, DestroyConnection
+    local Tweens = {}
+    local function Play(Instance, Info, Properties)
+        local Tween = TweenService:Create(Instance, Info, Properties)
+        Tweens[#Tweens + 1] = Tween
+        Tween:Play()
+    end
+    DestroyConnection = Wrapper.Destroying:Connect(function()
+        if Finished then return end
+        Finished = true
+        self._NotifyEntries[Wrapper] = nil
+        for _, Timer in {EntryTimer, DismissTimer, ExitTimer} do
+            if Timer then pcall(task.cancel, Timer) end
+        end
+        for _, Tween in Tweens do Tween:Cancel() end
+        DestroyConnection:Disconnect()
+    end)
+    Play(Outer, InInfo, {Position = UDim2.fromOffset(0, 0), GroupTransparency = 0})
+    EntryTimer = task.delay(InInfo.Time, function()
+        EntryTimer = nil
+        if Finished or not Wrapper.Parent then return end
+        Play(DurationLiner, TweenInfo.new(Time, Enum.EasingStyle.Linear), {Size = UDim2.fromScale(0, 1)})
+        DismissTimer = task.delay(Time, function()
+            DismissTimer = nil
+            if Finished or not Wrapper.Parent then return end
+            Play(Outer, OutInfo, {Position = UDim2.fromOffset(-28, 0), GroupTransparency = 1})
+            ExitTimer = task.delay(OutInfo.Time, function()
+                ExitTimer = nil
+                if not Finished then Wrapper:Destroy() end
+            end)
+        end)
+    end)
+    return Wrapper
 end;
 
 function Library:Playerlist(Opts)
